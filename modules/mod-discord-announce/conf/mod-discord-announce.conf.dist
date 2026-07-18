@@ -1,0 +1,57 @@
+[worldserver]
+
+# DiscordAnnounce.Enabled
+#     Enables or disables the module.
+# Default: 1 (true)
+
+DiscordAnnounce.Enabled = 1
+
+# For the next two configs, learn how to make a Discord chat receive webhooks:
+# https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks
+
+# Example ID from the generated webhook URL:
+# https://discord.com/api/webhooks/2394810934890304299/s6twp-pzuuuwncavgz9pulwsvcbcufqhf8q_jclno40e-diejam5makdorklxnmbnhf
+#                                  ^--------ID-------^
+
+DiscordAnnounce.WebhookID = ""
+
+# Example Token from the generated webhook URL:
+# https://discord.com/api/webhooks/2394810934890304299/fjsk8-oksmwmzpeaklwj_jkl3lslei40kslalei2l1ks-diejam5makdorklxnmbnhf
+#                                                      ^-----------------------------Token-------------------------------^
+
+DiscordAnnounce.WebhookToken = ""
+
+# DiscordAnnounce.GuildCreation
+#     Announces the name of the guild that was created.
+# Default: 1 (true)
+
+DiscordAnnounce.GuildCreation = 1
+
+# DiscordAnnounce.PlayerDeath
+#     Announces the death of a player only from a certain level going forward. 0 means that all 
+#     players that die will have their deaths announced. If, for example, the value is set to 60, 
+#     all players from level 60 and higher will have their deaths announced. -1 removes all 
+#     announcements. Only use valid level ranges.
+# Default: -1 (Don't announce deaths)
+
+DiscordAnnounce.PlayerDeath = -1
+
+# DiscordAnnounce.PlayerLevelUp
+#     Announces the name and level of characters who leveled up from a certain level going forward. 
+#     0 means that all level ups will be announced. If, for example, the value is set to 60, all
+#     characters level 60 or higher will have their level ups announced. Only use valid level ranges.
+# Default: -1 (Don't announce level ups)
+
+DiscordAnnounce.PlayerLevelUp = -1
+
+# DiscordAnnounce.PlayerMaxLevel
+#     Announces the name of the character that reached max level.
+# Default: 1 (true)
+
+DiscordAnnounce.PlayerMaxLevel = 1
+
+# DiscordAnnounce.WorldBossDeath
+#     Announces when a World Boss is killed.
+# Default: 1 (true)
+
+DiscordAnnounce.WorldBossDeath = 1

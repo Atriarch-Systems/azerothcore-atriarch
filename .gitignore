@@ -1,0 +1,124 @@
+#
+# AzerothCore
+#
+
+.cache
+/conf/*
+!/conf/dist
+# [atriarch-acore] removed upstream rule (modules are vendored here): /modules/*
+# [atriarch-acore] removed upstream rule (modules are vendored here): !/modules/*.md
+# [atriarch-acore] removed upstream rule (modules are vendored here): !/modules/*.sh
+# [atriarch-acore] removed upstream rule (modules are vendored here): !/modules/CMakeLists.txt
+# [atriarch-acore] removed upstream rule (modules are vendored here): !/modules/*.h
+# [atriarch-acore] removed upstream rule (modules are vendored here): !/modules/*.cmake
+/build*/
+/var/*
+!/var/build/.gitkeep
+!/var/ccache/.gitkeep
+/env/dist/*
+!/env/dist/.gitkeep
+/env/user/*
+/.env*
+/apps/joiner
+/deps/deno
+/data/sql/custom/*
+# [atriarch-acore] removed upstream rule (modules are vendored here): /src/server/scripts/Custom/*
+# [atriarch-acore] removed upstream rule (modules are vendored here): !/src/server/scripts/Custom/README.md
+
+/*.override.yml
+/*.override.yaml
+
+!.gitkeep
+
+# default build directory if not specified by CMAKE configuration
+/out/*
+
+#
+#Generic
+#
+
+.directory
+.mailmap
+*.orig
+*.rej
+*~
+.hg/
+*.kdev*
+.DS_Store
+CMakeLists.txt.user
+*.bak
+*.patch
+*.diff
+*.REMOTE.*
+*.BACKUP.*
+*.BASE.*
+*.LOCAL.*
+
+#
+# Claude
+#
+.claude/worktrees
+.claude/settings.local.json
+.claude/plans/**
+
+#
+# IDE & other software
+#
+/.settings/
+/.externalToolBuilders/*
+/.vs
+/out
+# exclude in all levels
+nbproject/
+.sync.ffs_db
+*.kate-swp
+.browse.VC*
+.idea
+cmake-build-*/*
+coverage-report/
+.vs
+
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+#
+# Eclipse
+#
+*.pydevproject
+.metadata
+.gradle
+tmp/
+*.tmp
+*.swp
+*~.nib
+local.properties
+.settings/
+.loadpath
+.project
+.cproject
+
+# vcpkg integration
+/vcpkg/
+/vcpkg-ports/
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+
+
+# ==================
+#
+#  CUSTOM
+#
+#  put below your custom ignore rules
+#  for example , if you want to include a
+#  module directly in repositoryyou can do:
+#
+#  !modules/yourmodule
+#
+# ==================
+.cache
+compile_commands.json

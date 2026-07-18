@@ -1,0 +1,102 @@
+[worldserver]
+
+########################################
+# mod-ollama-bot-buddy configuration
+# DIRECTOR MODE: the playerbot AI keeps playing the game; the LLM only picks
+# high-level directives for the bots listed in OllamaBotControl.BotNames.
+# See docs/director-mode.md and docs/seeker-selenwe.md in the repository.
+########################################
+
+# OllamaBotControl.Enable
+#     Description: Enable or disable the module (master switch).
+#     Default:     0 (disabled)
+OllamaBotControl.Enable = 0
+
+# OllamaBotControl.Url
+#     Description: The URL used to query the Ollama API.
+#                  Deployments override via env AC_OLLAMABOTCONTROL_URL.
+#     Default:     http://localhost:11434/api/generate
+OllamaBotControl.Url = http://localhost:11434/api/generate
+
+# OllamaBotControl.Model
+#     Description: The model identifier to be used in the Ollama API request.
+#     Default:     llama3.2:1b
+OllamaBotControl.Model = gemma4:e4b
+
+# OllamaBotControl.BotNames
+#     Description: Comma-separated character names that receive director ticks.
+#                  Only these bots consult the LLM; everyone else runs the
+#                  normal playerbot AI untouched.
+#     Default:     (empty - no director bots)
+OllamaBotControl.BotNames =
+
+# OllamaBotControl.TickSeconds
+#     Description: Seconds between director decisions per bot (min 10).
+#     Default:     45
+OllamaBotControl.TickSeconds = 45
+
+# OllamaBotControl.SeekerName
+#     Description: Name of the ONE seeker bot (the "find the real player"
+#                  experiment, docs/seeker-selenwe.md). Must name an EXISTING
+#                  character (e.g. one of the random bots). Empty disables the
+#                  seeker. Never run more than one seeker.
+#     Default:     (empty)
+OllamaBotControl.SeekerName =
+
+# OllamaBotControl.SeekerPersona
+#     Description: System prompt/backstory for the seeker.
+#     Default:     (built-in wistful night elf huntress persona)
+# OllamaBotControl.SeekerPersona =
+
+# OllamaBotControl.ChronicleIntervalMinutes
+#     Description: The seeker consolidates her journal into a first-person
+#                  memoir chapter ("chronicle") at most this often.
+#     Default:     180
+OllamaBotControl.ChronicleIntervalMinutes = 180
+
+# OllamaBotControl.ChronicleEventThreshold
+#     Description: ...or as soon as this many unconsolidated journal events
+#                  have accumulated, whichever comes first.
+#     Default:     60
+OllamaBotControl.ChronicleEventThreshold = 60
+
+# OllamaBotControl.Debug
+#     Description: Verbose logging of directives and LLM replies.
+#     Default:     0 (false)
+OllamaBotControl.Debug = 0
+
+# OllamaBotControl.EnableBotBuddyAddon
+#     Description: Enable or disable sending the bot state to the Bot Buddy addon.
+#     Default:     0 (false)
+OllamaBotControl.EnableBotBuddyAddon = 0
+
+########################################
+# Rebirth cycling (population pyramid)
+########################################
+# A deterministic cohort of random bots is periodically reborn at level 1
+# (Death Knights: their heroic starting level) so the world keeps a healthy
+# spread of levels; the rest are long-lived and level to the cap.
+#
+# Cohort partition (deterministic, stable across restarts): random-bot
+# accounts (AiPlayerbot.RandomBotAccountPrefix + number) are ordered by their
+# numeric suffix; walking that order, accounts are added to the CYCLING
+# cohort until their characters total Rebirth.CohortSize. All characters of
+# later accounts are long-lived. Characters named in OllamaBotControl.BotNames
+# or OllamaBotControl.SeekerName are NEVER reborn, regardless of cohort.
+#
+# Selection: the online cohort bot with the oldest (or no) previous rebirth
+# is chosen -> round-robin over the whole cohort.
+
+# Rebirth.Enable
+#     Default: 1 (enabled)
+Rebirth.Enable = 1
+
+# Rebirth.PerDay
+#     Description: How many rebirths per day, spread evenly (8 = one ~every 3h).
+#     Default: 8
+Rebirth.PerDay = 8
+
+# Rebirth.CohortSize
+#     Description: Target number of characters in the cycling cohort.
+#     Default: 500
+Rebirth.CohortSize = 500
