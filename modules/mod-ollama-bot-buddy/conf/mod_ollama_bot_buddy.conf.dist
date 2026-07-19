@@ -73,9 +73,15 @@ OllamaBotControl.EnableBotBuddyAddon = 0
 ########################################
 # Rebirth cycling (population pyramid)
 ########################################
-# A deterministic cohort of random bots is periodically reborn at level 1
-# (Death Knights: their heroic starting level) so the world keeps a healthy
-# spread of levels; the rest are long-lived and level to the cap.
+# GRADUATION model: cohort bots live their entire journey to max level, and
+# only then are reborn at level 1 (Death Knights: their heroic starting
+# level). Max level source: the playerbots random-bot ceiling
+# (AiPlayerbot.RandomBotMaxLevel) clamped by the world MaxPlayerLevel config.
+# Rebirth.PerDay is a RATE CAP, not a quota: if no cohort bot is at max
+# level when the interval elapses, nothing happens (a young server sees zero
+# rebirths until the first bots cap - expected and correct); steady-state
+# turnover self-regulates. Non-cohort bots are long-lived and simply stay
+# at cap once they get there.
 #
 # Cohort partition (deterministic, stable across restarts): random-bot
 # accounts (AiPlayerbot.RandomBotAccountPrefix + number) are ordered by their
@@ -92,7 +98,8 @@ OllamaBotControl.EnableBotBuddyAddon = 0
 Rebirth.Enable = 1
 
 # Rebirth.PerDay
-#     Description: How many rebirths per day, spread evenly (8 = one ~every 3h).
+#     Description: Maximum rebirths per day, spread evenly (8 = at most one
+#                  ~every 3h). Only max-level cohort bots ever qualify.
 #     Default: 8
 Rebirth.PerDay = 8
 

@@ -141,7 +141,7 @@ namespace
             ? sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL)
             : 1;
 
-        LOG_INFO("server.loading", "[BotRebirth] Rebirthing '{}' (level {} -> {}).", bot->GetName(), oldLevel, level);
+        LOG_INFO("server.loading", "[BotRebirth] Graduation: '{}' completed the journey (level {} -> {}).", bot->GetName(), oldLevel, level);
 
         // Same mechanism RandomPlayerbotMgr::RandomizeFirst uses, pinned low:
         // the factory handles leveling, gear, spells, talents for the target level.
@@ -210,8 +210,15 @@ void BotRebirthLoop::OnUpdate(uint32 /*diff*/)
     if (now - g_lastRebirthGlobal < interval)
         return;
 
-    // Candidate: ONLINE cycling bot, not protected, not in combat, with the
-    // oldest last-rebirth (never-reborn first) -> round-robin over the cohort.
+    // GRADUATION: only cohort bots that reached max level are eligible.
+    // Max level source: the playerbots random-bot ceiling clamped by the
+    // world max-level config (same clamp RandomizeFirst applies).
+    uint32 maxLevel = std::min<uint32>(sPlayerbotAIConfig.randomBotMaxLevel,
+                                       sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
+
+    // Candidate: ONLINE cycling bot AT max level, not protected, not in
+    // combat, with the oldest last-rebirth (a freshly-capped bot with no
+    // record ranks first: its first graduation).
     auto protectedNames = ProtectedNames();
     Player* best = nullptr;
     time_t bestAt = 0;
@@ -223,6 +230,8 @@ void BotRebirthLoop::OnUpdate(uint32 /*diff*/)
         PlayerbotAI* ai = sPlayerbotsMgr.GetPlayerbotAI(bot);
         if (!ai)
             continue;
+        if (bot->GetLevel() < maxLevel)
+            continue; // not graduated yet - NEVER rebirth sub-max bots
         uint32 guidLow = bot->GetGUID().GetCounter();
         if (!g_cyclingGuids.count(guidLow))
             continue;
@@ -239,4 +248,6 @@ void BotRebirthLoop::OnUpdate(uint32 /*diff*/)
 
     if (best)
         DoRebirth(best);
+    else
+        LOG_DEBUG("server.loading", "[BotRebirth] Interval elapsed but no cohort bot at max level ({}); waiting for a graduation.", maxLevel);
 }
