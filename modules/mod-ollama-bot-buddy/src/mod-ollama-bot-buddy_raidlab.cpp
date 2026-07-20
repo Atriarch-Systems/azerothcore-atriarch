@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <sstream>
+#include <unordered_set>
 #include <vector>
 
 using namespace Acore::ChatCommands;
@@ -190,8 +191,22 @@ bool RaidLabCommandScript::HandleSetup(ChatHandler* handler, Optional<uint32> co
     uint32 wantDps    = count > (wantTanks + wantHeals) ? count - wantTanks - wantHeals : 1;
 
     auto const& cycling = BotCohort::CyclingGuids(g_raidLabCohortSize);
-    std::vector<Player*> tanks, heals, dps;
 
+    // Role capability is decided by CLASS, not by current spec: on a young
+    // server every bot is level 1 with no talents, so spec-derived
+    // IsTank/IsHeal/IsDps are false for everyone. The lab levels and gears
+    // subjects itself (the factory picks talents), so what matters is what a
+    // class CAN do once trained.
+    auto isPureTank = [](uint8 cls) { return cls == CLASS_WARRIOR || cls == CLASS_DEATH_KNIGHT; };
+    auto isPureHeal = [](uint8 cls) { return cls == CLASS_PRIEST  || cls == CLASS_SHAMAN; };
+    auto isHybrid   = [](uint8 cls) { return cls == CLASS_PALADIN || cls == CLASS_DRUID; };
+    auto tankCapable = [&](uint8 cls) { return isPureTank(cls) || isHybrid(cls); };
+    auto healCapable = [&](uint8 cls) { return isPureHeal(cls) || isHybrid(cls); };
+
+    // Eligible pool, bucketed by capability. Hybrids are held back so they can
+    // backfill whichever role ends up short instead of stranding pure classes.
+    std::vector<Player*> poolPureTank, poolPureHeal, poolHybrid, poolOther;
+    uint32 eligibleCount = 0;
     for (auto const& itr : ObjectAccessor::GetPlayers())
     {
         Player* bot = itr.second;
@@ -207,16 +222,39 @@ bool RaidLabCommandScript::HandleSetup(ChatHandler* handler, Optional<uint32> co
         if (!BotCohort::IsRandomBotCharacter(bot))
             continue;                                        // only random bots
 
-        if (PlayerbotAI::IsTank(bot, true) && tanks.size() < wantTanks)
-            tanks.push_back(bot);
-        else if (PlayerbotAI::IsHeal(bot, true) && heals.size() < wantHeals)
-            heals.push_back(bot);
-        else if (PlayerbotAI::IsDps(bot, true) && dps.size() < wantDps)
-            dps.push_back(bot);
-
-        if (tanks.size() >= wantTanks && heals.size() >= wantHeals && dps.size() >= wantDps)
-            break;
+        ++eligibleCount;
+        uint8 cls = bot->getClass();
+        if (isPureTank(cls))      poolPureTank.push_back(bot);
+        else if (isPureHeal(cls)) poolPureHeal.push_back(bot);
+        else if (isHybrid(cls))   poolHybrid.push_back(bot);
+        else                      poolOther.push_back(bot);
     }
+
+    std::vector<Player*> tanks, heals, dps;
+    std::unordered_set<uint32> drafted;
+    auto draft = [&](std::vector<Player*>& dest, std::vector<Player*>& pool, uint32 want)
+    {
+        for (Player* p : pool)
+        {
+            if (dest.size() >= want)
+                break;
+            if (drafted.count(p->GetGUID().GetCounter()))
+                continue;
+            drafted.insert(p->GetGUID().GetCounter());
+            dest.push_back(p);
+        }
+    };
+
+    // Tanks: warriors/DKs first, hybrids backfill. Healers: priests/shamans
+    // first, hybrids backfill. Then everyone else fills dps.
+    draft(tanks, poolPureTank, wantTanks);
+    draft(tanks, poolHybrid,   wantTanks);
+    draft(heals, poolPureHeal, wantHeals);
+    draft(heals, poolHybrid,   wantHeals);
+    draft(dps,   poolOther,    wantDps);
+    draft(dps,   poolHybrid,   wantDps);
+    draft(dps,   poolPureHeal, wantDps);
+    draft(dps,   poolPureTank, wantDps);
 
     if (tanks.size() < wantTanks || heals.size() < wantHeals || dps.size() < wantDps)
         LOG_INFO("server.loading", "[RaidLab] Role shortfall: tanks {}/{}, healers {}/{}, dps {}/{} - filling best effort.",
@@ -235,7 +273,15 @@ bool RaidLabCommandScript::HandleSetup(ChatHandler* handler, Optional<uint32> co
 
     if (g_subjects.empty())
     {
-        Reply(handler, "raidlab setup: no eligible long-lived random bots online (check they are logged in and above the rebirth cohort line)");
+        if (eligibleCount == 0)
+            Reply(handler, "raidlab setup: no eligible long-lived random bots ONLINE - subjects must be logged in, "
+                           "on random-bot accounts above the rebirth cohort line, and not seeker/director bots");
+        else
+            Reply(handler, "raidlab setup: " + std::to_string(eligibleCount) +
+                           " eligible bots online but no roles could be filled (tank-capable " +
+                           std::to_string(poolPureTank.size() + poolHybrid.size()) + ", heal-capable " +
+                           std::to_string(poolPureHeal.size() + poolHybrid.size()) + ", other " +
+                           std::to_string(poolOther.size()) + ")");
         return true;
     }
 
@@ -251,8 +297,13 @@ bool RaidLabCommandScript::HandleSetup(ChatHandler* handler, Optional<uint32> co
         sRandomPlayerbotMgr.SetValue(bot, "level", maxLevel);
         PlayerbotFactory factory(bot, maxLevel, ITEM_QUALITY_EPIC, g_raidLabGearScore);
         factory.Randomize(false);
-        LOG_INFO("server.loading", "[RaidLab] Prepared subject '{}' ({}) at level {} (epic, gs limit {}).",
-            s.name, s.role, maxLevel, g_raidLabGearScore);
+        // Report the spec-derived role the factory's talent choice actually
+        // produced, next to the role we drafted it for.
+        std::string actual = PlayerbotAI::IsTank(bot, true) ? "tank"
+                           : PlayerbotAI::IsHeal(bot, true) ? "healer"
+                           : PlayerbotAI::IsDps(bot, true)  ? "dps" : "none";
+        LOG_INFO("server.loading", "[RaidLab] Prepared subject '{}' class {} intended {} -> actual spec role {} at level {} (epic, gs limit {}).",
+            s.name, uint32(bot->getClass()), s.role, actual, maxLevel, g_raidLabGearScore);
     }
 
     SaveSubjects();
