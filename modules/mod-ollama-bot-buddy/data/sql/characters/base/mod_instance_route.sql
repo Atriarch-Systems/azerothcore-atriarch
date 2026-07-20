@@ -1,3 +1,7 @@
+-- SUPERSEDED: route data now lives in the WORLD db
+-- (mod_guild_dungeon_route, see data/sql/db-world/base/mod_guild_dungeon.sql).
+-- This file is retained only so the table keeps existing on servers that
+-- already applied it; nothing reads it any more.
 -- Instance route data for the intent layer (scripted progression, not LLM).
 -- Must stay idempotent: base files may be re-applied when their hash drifts.
 --

@@ -5,6 +5,7 @@
  */
 
 #include "RandomPlayerbotMgr.h"
+#include "ManagedBotRegistry.h"
 
 #include <WorldSessionMgr.h>
 
@@ -1429,6 +1430,10 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
     }
 
     uint32 logout = GetEventValue(bot, "logout");
+    // Never log out a bot that an orchestrator is currently driving: a dungeon
+    // run outlives minRandomBotInWorldTime (default 600s).
+    if (player && sManagedBotRegistry.IsManagedBot(player->GetGUID().GetCounter()))
+        logout = 1;
     if (player && !logout && !isValid)
     {
         LOG_DEBUG("playerbots", "Bot #{} {}:{} <{}>: log out", bot, IsAlliance(player->getRace()) ? "A" : "H",
@@ -1449,6 +1454,20 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
     PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
     if (!botAI)
         return false;
+
+    // Bots driven by an external orchestrator (guild dungeon runs, raid lab)
+    // are off-limits to the random-bot lifecycle entirely: everything below
+    // this point would disband their group, re-randomize gear/talents and
+    // strategies mid-run, teleport the leader to a grind zone, or revive dead
+    // members away from their corpse.
+    if (!sManagedBotRegistry.Empty())
+    {
+        if (sManagedBotRegistry.IsManagedBot(bot->GetGUID().GetCounter()))
+            return false;
+        if (Group* mgroup = bot->GetGroup())
+            if (sManagedBotRegistry.IsManagedGroup(mgroup->GetGUID().GetCounter()))
+                return false;
+    }
 
     if (bot->InBattleground())
         return false;

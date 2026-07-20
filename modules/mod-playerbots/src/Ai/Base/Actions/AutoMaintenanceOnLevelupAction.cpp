@@ -169,6 +169,11 @@ void AutoMaintenanceOnLevelupAction::AutoUpgradeEquip()
     factory.InitConsumables();
     factory.InitPotions();
 
-    if (sPlayerbotAIConfig.autoUpgradeEquip)
+    // Honor the same persistence guard PlayerbotFactory applies (:625): without
+    // it, InitEquipment(true) replaces looted gear on every level-up, which
+    // deletes dungeon loot within minutes on a leveling realm.
+    if (sPlayerbotAIConfig.autoUpgradeEquip &&
+        (!sPlayerbotAIConfig.equipAndSpecPersistence ||
+         bot->GetLevel() < uint32(sPlayerbotAIConfig.equipAndSpecPersistenceLevel)))
         factory.InitEquipment(true);
 }

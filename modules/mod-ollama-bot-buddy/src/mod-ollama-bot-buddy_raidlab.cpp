@@ -22,6 +22,7 @@
 #include "World.h"
 #include <algorithm>
 #include <cstdlib>
+#include <iomanip>
 #include <sstream>
 #include <unordered_set>
 #include <vector>
@@ -52,6 +53,7 @@ namespace
     bool g_wipeLatch = false;
     std::unordered_set<uint32> g_deadReported;
     std::unordered_set<uint32> g_bossReported;
+    std::unordered_set<uint32> g_outsideReported;
 
     struct RaidLabInstance
     {
@@ -478,6 +480,8 @@ bool RaidLabCommandScript::HandleStart(ChatHandler* handler, std::string instanc
         }
     }
     LOG_INFO("server.loading", "[RaidLab] Teleport results: {} accepted, {} refused.", teleported, refused);
+    // The watcher re-checks each member's map/instance on its next tick, once
+    // the teleports have actually landed (post-entry verification).
 
     g_running = true;
     g_instanceKey = info->key;
@@ -487,6 +491,7 @@ bool RaidLabCommandScript::HandleStart(ChatHandler* handler, std::string instanc
     g_wipeLatch = false;
     g_deadReported.clear();
     g_bossReported.clear();
+    g_outsideReported.clear();
 
     std::ostringstream msg;
     msg << "raidlab start: " << info->label << " (map " << info->mapId << ") - raid of " << members
@@ -507,7 +512,11 @@ bool RaidLabCommandScript::HandleStart(ChatHandler* handler, std::string instanc
         std::vector<ObjectGuid> guids;
         for (Player* p : subjects)
             guids.push_back(p->GetGUID());
-        Intent::StartRun(info->mapId, guids, 1);
+        Intent::StartRun(info->key, info->mapId, guids, 1);
+        // Bind to the leader's instance so members who failed to enter are
+        // ignored by the advance rule instead of blocking every step forever.
+        if (leader->GetInstanceId())
+            Intent::SetInstance(leader->GetInstanceId(), x, y, z, o);
         Intent::PauseRun(); // explicit .raidlab go begins movement
         if (Intent::RouteSize() == 0)
             LOG_INFO("server.loading", "[RaidLab] No route data for map {} - bots will hold at the entrance until a route is seeded.", info->mapId);
@@ -521,7 +530,7 @@ bool RaidLabCommandScript::HandleStart(ChatHandler* handler, std::string instanc
 bool RaidLabCommandScript::HandleRoute(ChatHandler* handler)
 {
     uint32 mapId = Intent::IsActive() ? Intent::RunMapId() : 0;
-    auto const& route = Intent::GetRoute(mapId);
+    auto const& route = Intent::GetRoute(Intent::IsActive() ? Intent::RunRouteKey() : std::string());
     if (route.empty())
     {
         Reply(handler, "raidlab route: no route loaded (run .raidlab start first, and seed mod_instance_route for the map)");
@@ -531,9 +540,12 @@ bool RaidLabCommandScript::HandleRoute(ChatHandler* handler)
     for (auto const& wp : route)
     {
         std::ostringstream line;
+        // Coordinates are FLOAT and often negative: printing them through uint32
+        // rendered -3476.29 as 4294963820 and looked like data corruption.
         line << (wp.step == Intent::CurrentStep() ? "-> " : "   ")
              << wp.step << ". " << wp.label << " [" << wp.kind << "] ("
-             << uint32(wp.x) << ", " << uint32(wp.y) << ", " << uint32(wp.z) << ")";
+             << std::fixed << std::setprecision(1)
+             << wp.x << ", " << wp.y << ", " << wp.z << ")";
         handler->SendSysMessage(line.str().c_str());
     }
 
@@ -654,6 +666,7 @@ bool RaidLabCommandScript::HandleStop(ChatHandler* handler)
     g_running = false;
     g_deadReported.clear();
     g_bossReported.clear();
+    g_outsideReported.clear();
 
     Reply(handler, "raidlab stop: group disbanded, " + std::to_string(subjects.size()) + " subjects returned to capitals");
     return true;
@@ -710,6 +723,13 @@ void RaidLabWatcher::OnUpdate(uint32 /*diff*/)
             ++inCombat;
         if (p->GetMapId() == g_instanceMapId)
             ++inInstance;
+        else if (!g_outsideReported.count(p->GetGUID().GetCounter()))
+        {
+            g_outsideReported.insert(p->GetGUID().GetCounter());
+            LOG_INFO("server.loading", "[RaidLab][Entry] '{}' is NOT in the instance: map={} inst={} alive={} "
+                     "- check faction/bind/level gates for this member.",
+                     p->GetName(), p->GetMapId(), p->GetInstanceId(), p->IsAlive() ? "yes" : "no");
+        }
 
         // Best-effort boss engagement detection: a subject fighting a
         // world-boss/elite-classified creature inside the instance.

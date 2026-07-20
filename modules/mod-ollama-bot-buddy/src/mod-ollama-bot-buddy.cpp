@@ -4,6 +4,7 @@
 #include "mod-ollama-bot-buddy_rebirth.h"
 #include "mod-ollama-bot-buddy_raidlab.h"
 #include "mod-ollama-bot-buddy_intent.h"
+#include "mod-ollama-bot-buddy_guilddungeon.h"
 
 #include "Log.h"
 
@@ -18,4 +19,6 @@ void Addmod_ollama_bot_buddyScripts()
     new RaidLabCommandScript();
     new RaidLabWatcher();
     new IntentWorldScript();
+    new GuildDungeonWorldScript();
+    new GuildDungeonCommandScript();
 }

@@ -145,6 +145,8 @@ bool PlayerbotAIConfig::Initialize()
     missingBuffReagentMessageCooldown = sConfigMgr->GetOption<uint32>(
         "AiPlayerbot.MissingBuffReagentMessageCooldown", 300);
     autoAvoidAoe = sConfigMgr->GetOption<bool>("AiPlayerbot.AutoAvoidAoe", true);
+    // All-bot groups have no real-player master, so without this they stand in every void zone.
+    autoAvoidAoeForBots = sConfigMgr->GetOption<bool>("AiPlayerbot.AutoAvoidAoeForBots", true);
     maxAoeAvoidRadius = sConfigMgr->GetOption<float>("AiPlayerbot.MaxAoeAvoidRadius", 15.0f);
     LoadSet<std::set<uint32>>(sConfigMgr->GetOption<std::string>("AiPlayerbot.AoeAvoidSpellWhitelist", "50759,57491,13810,29946"),
                               aoeAvoidSpellWhitelist);

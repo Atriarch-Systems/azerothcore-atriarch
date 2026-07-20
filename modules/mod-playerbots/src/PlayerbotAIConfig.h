@@ -114,6 +114,7 @@ public:
     bool tellWhenMissingBuffReagents;
     uint32 missingBuffReagentMessageCooldown;
     bool autoAvoidAoe;
+    bool autoAvoidAoeForBots;
     float maxAoeAvoidRadius;
     std::set<uint32> aoeAvoidSpellWhitelist;
     bool tellWhenAvoidAoe;

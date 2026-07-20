@@ -168,3 +168,43 @@ Intent.OutOfCombatSeconds = 5
 #                  step N" with every member's distance to the waypoint.
 #     Default: 120
 Intent.StuckTimeout = 120
+
+########################################
+# Guild dungeon progression (Phase 1)
+########################################
+# A guild's lowest-level eligible cohort forms a group, rallies at a town with
+# a flight master, travels to the dungeon, enters together (leader first so all
+# members share one instance id), walks an authored route from the WORLD db
+# (mod_guild_dungeon_catalog / mod_guild_dungeon_route), and hearths home.
+#
+# Phase 1 does NOT auto-start runs - drive it with:
+#   .guilddungeon cohorts              why each guild can/cannot field a group
+#   .guilddungeon start <guildId> <dungeonId>
+#   .guilddungeon force <guildId>      ignore level gates (smoke test)
+#   .guilddungeon status | abort
+
+GuildDungeon.Enable = 1
+
+# Seconds between cohort evaluations while idle (runs tick every second).
+GuildDungeon.TickSeconds = 30
+
+# Lowest level a bot may be drafted at, and how far above the cohort's anchor
+# (lowest) level members may be.
+GuildDungeon.MinLevel = 15
+GuildDungeon.LevelBand = 6
+
+GuildDungeon.MinMembers = 5
+GuildDungeon.MaxRunMinutes = 45
+
+# Seconds all members must be dead before a wipe ends the run.
+GuildDungeon.WipeGraceSeconds = 60
+
+# Seconds to linger after the last step so asynchronous loot/auto-equip lands.
+GuildDungeon.LootGraceSeconds = 20
+
+# Travel flavor: how long to wait for the group to gather at the rally town,
+# and how long to walk overland before falling back to a teleport.
+GuildDungeon.RallySeconds = 120
+GuildDungeon.TravelSeconds = 600
+
+GuildDungeon.Debug = 1
