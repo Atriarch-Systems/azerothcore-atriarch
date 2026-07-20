@@ -221,6 +221,10 @@ bool RaidLabCommandScript::HandleSetup(ChatHandler* handler, Optional<uint32> co
             continue;                                        // rebirth cohort: never draft
         if (!BotCohort::IsRandomBotCharacter(bot))
             continue;                                        // only random bots
+        // Subject preconditions: anything the teleport/group path would choke
+        // on later is excluded here rather than failing mid-launch.
+        if (bot->IsInCombat() || bot->InBattleground() || bot->IsInFlight() || bot->IsBeingTeleported())
+            continue;
 
         ++eligibleCount;
         uint8 cls = bot->getClass();
@@ -338,11 +342,31 @@ bool RaidLabCommandScript::HandleGuild(ChatHandler* handler, Optional<std::strin
         return true;
     }
 
+    // Guild::Create rejects: existing name, leader without a session, and
+    // (via the caller) invalid charter names. Spaces ARE allowed
+    // (IsValidCharterName -> isValidString with numericOrSpace=true), but
+    // length/profanity/reserved rules still apply, so pre-check and report.
+    if (guildName.size() < 2 || guildName.size() > 24)
+    {
+        Reply(handler, "raidlab guild: name must be 2-24 characters");
+        return true;
+    }
+    if (sGuildMgr->GetGuildByName(guildName))
+    {
+        Reply(handler, "raidlab guild: a guild named '" + guildName + "' already exists");
+        return true;
+    }
+    if (!ObjectMgr::IsValidCharterName(guildName))
+    {
+        Reply(handler, "raidlab guild: '" + guildName + "' is not a valid guild name (reserved/profanity/charset)");
+        return true;
+    }
+
     Guild* guild = new Guild();
     if (!guild->Create(leader, guildName))
     {
         delete guild;
-        Reply(handler, "raidlab guild: guild creation failed (name taken?)");
+        Reply(handler, "raidlab guild: guild creation failed for leader " + leader->GetName());
         return true;
     }
     sGuildMgr->AddGuild(guild);
@@ -354,6 +378,9 @@ bool RaidLabCommandScript::HandleGuild(ChatHandler* handler, Optional<std::strin
             continue;
         if (guild->AddMember(p->GetGUID()))
             ++added;
+        else
+            LOG_INFO("server.loading", "[RaidLab] Guild add failed for '{}' (already guilded, or cross-faction with the leader).",
+                p->GetName());
     }
 
     Reply(handler, "raidlab guild: '" + guildName + "' created, leader " + leader->GetName() +
@@ -406,19 +433,46 @@ bool RaidLabCommandScript::HandleStart(ChatHandler* handler, std::string instanc
             g->RemoveMember(p->GetGUID());
         if (group->AddMember(p))
             ++members;
+        else
+            LOG_INFO("server.loading", "[RaidLab] Could not add '{}' to the raid group (raid full?).", p->GetName());
+    }
+
+    // Raid maps reject anyone who is not IN a raid group and whose personal
+    // raid difficulty does not match (MapMgr::PlayerCannotEnter), so the group
+    // must exist and every member's difficulty must be set BEFORE the
+    // teleport. Bots also cannot enter dead or in combat.
+    for (Player* p : subjects)
+    {
+        p->SetRaidDifficulty(RAID_DIFFICULTY_10MAN_NORMAL);
+        p->SetDungeonDifficulty(DUNGEON_DIFFICULTY_NORMAL);
+        p->CombatStop(true);
+        if (!p->IsAlive())
+            p->ResurrectPlayer(1.0f);
     }
 
     float x, y, z, o;
     std::string source;
     ResolveEntrance(*info, x, y, z, o, source);
 
+    uint32 teleported = 0, refused = 0;
     for (Player* p : subjects)
     {
-        p->CombatStop(true);
-        if (!p->IsAlive())
-            p->ResurrectPlayer(1.0f);
-        p->TeleportTo(info->mapId, x, y, z, o);
+        if (!p->GetGroup() || !p->GetGroup()->isRaidGroup())
+        {
+            ++refused;
+            LOG_INFO("server.loading", "[RaidLab] '{}' is not in the raid group - skipping teleport (raid maps require a raid group).", p->GetName());
+            continue;
+        }
+        if (p->TeleportTo(info->mapId, x, y, z, o))
+            ++teleported;
+        else
+        {
+            ++refused;
+            LOG_INFO("server.loading", "[RaidLab] TeleportTo({}) REFUSED for '{}' - check instance bind/difficulty/level gates.",
+                info->mapId, p->GetName());
+        }
     }
+    LOG_INFO("server.loading", "[RaidLab] Teleport results: {} accepted, {} refused.", teleported, refused);
 
     g_running = true;
     g_instanceKey = info->key;
@@ -492,23 +546,29 @@ bool RaidLabCommandScript::HandleStop(ChatHandler* handler)
 {
     std::vector<Player*> subjects = OnlineSubjects();
 
-    for (Player* p : subjects)
-    {
-        if (Group* g = p->GetGroup())
-            g->Disband();
-        break; // disbanding once removes everyone
-    }
-
+    // Teleport OUT first: leaving the raid group before the teleport would
+    // make the outbound trip a non-raid exit from a raid map, and losing the
+    // group mid-flight has caused stuck subjects. Capital cities are normal
+    // maps, so no group is required for the exit itself - but do it in this
+    // order so subjects are never grouped-but-stranded.
     for (Player* p : subjects)
     {
         p->CombatStop(true);
         if (!p->IsAlive())
             p->ResurrectPlayer(1.0f);
-        // Return to a capital: Stormwind / Orgrimmar depending on faction.
         if (p->GetTeamId() == TEAM_ALLIANCE)
             p->TeleportTo(0, -8833.38f, 628.628f, 94.0066f, 1.0f);
         else
             p->TeleportTo(1, 1503.32f, -4415.35f, 21.7195f, 3.14f);
+    }
+
+    for (Player* p : subjects)
+    {
+        if (Group* g = p->GetGroup())
+        {
+            g->Disband();
+            break; // disbanding once removes everyone
+        }
     }
 
     g_running = false;

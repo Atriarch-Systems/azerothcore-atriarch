@@ -101,7 +101,7 @@ namespace BotCohort
 
     bool IsRandomBotCharacter(Player* bot)
     {
-        if (!bot)
+        if (!bot || !bot->GetSession())
             return false;
         std::string prefix = sPlayerbotAIConfig.randomBotAccountPrefix;
         if (prefix.empty())
@@ -109,7 +109,13 @@ namespace BotCohort
         QueryResult r = LoginDatabase.Query("SELECT username FROM account WHERE id = {}", bot->GetSession()->GetAccountId());
         if (!r)
             return false;
-        std::string name = (*r)[0].Get<std::string>();
-        return name.compare(0, prefix.size(), prefix) == 0;
+        // AzerothCore stores account usernames UPPERCASED while the config
+        // prefix is typically lowercase ("rndbot"), so this MUST be
+        // case-insensitive. (The cohort LIKE query above is unaffected
+        // because MySQL collation is case-insensitive - which is exactly why
+        // this asymmetry hid a total-rejection bug.)
+        std::string name = LowerCopy((*r)[0].Get<std::string>());
+        std::string pfx = LowerCopy(prefix);
+        return name.size() >= pfx.size() && name.compare(0, pfx.size(), pfx) == 0;
     }
 }
