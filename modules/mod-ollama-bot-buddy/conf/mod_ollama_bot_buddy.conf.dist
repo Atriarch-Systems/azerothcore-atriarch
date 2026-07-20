@@ -107,3 +107,28 @@ Rebirth.PerDay = 8
 #     Description: Target number of characters in the cycling cohort.
 #     Default: 500
 Rebirth.CohortSize = 500
+
+########################################
+# Raid lab (autonomous bot raid experiments)
+########################################
+# Admin/console commands (SOAP-friendly):
+#   .raidlab setup [count]              select, level and gear subjects
+#   .raidlab guild [name]               guild the subjects
+#   .raidlab start <naxx|eoe|voa|icc>   form the raid and teleport in
+#   .raidlab status                     per-subject state + summary
+#   .raidlab stop                       disband, teleport out, clear combat
+#
+# Subjects are drawn ONLY from long-lived random bots (accounts ABOVE the
+# Rebirth.CohortSize line) so lab subjects can never be recycled, and never
+# include OllamaBotControl.BotNames / SeekerName characters.
+
+# RaidLab.GearScore
+#     Description: Gear score ceiling handed to PlayerbotFactory when gearing
+#                  subjects (epic quality). The factory compares this against
+#                  CalcMixedGearScore = itemLevel * quality multiplier
+#                  (epic = 1.4641), so 5000 is far above any WotLK item and
+#                  effectively means "no restriction" - deliberately
+#                  over-gearing so raid experiments test mechanics, not DPS.
+#                  Lower it (e.g. 350) to constrain gear meaningfully.
+#     Default:     5000
+RaidLab.GearScore = 5000
