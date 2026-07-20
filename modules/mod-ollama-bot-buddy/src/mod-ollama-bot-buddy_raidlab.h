@@ -11,6 +11,10 @@
 //   .raidlab start <naxx|eoe|voa|icc>   form the raid and teleport in
 //   .raidlab status               per-subject state + summary
 //   .raidlab stop                 disband, teleport out, clear combat
+//   .raidlab route                show the route, current step and status
+//   .raidlab go                   begin/resume scripted progression
+//   .raidlab pause                pause progression (combat AI keeps working)
+//   .raidlab step <n>             jump to a route step (testing)
 //
 // Subjects are drawn ONLY from long-lived random bots (above the rebirth
 // cohort line) and never include LLM-driven bots.
@@ -25,6 +29,10 @@ public:
     static bool HandleStart(ChatHandler* handler, std::string instance);
     static bool HandleStatus(ChatHandler* handler);
     static bool HandleStop(ChatHandler* handler);
+    static bool HandleRoute(ChatHandler* handler);
+    static bool HandleGo(ChatHandler* handler);
+    static bool HandlePause(ChatHandler* handler);
+    static bool HandleStep(ChatHandler* handler, uint32 step);
 };
 
 // Periodic observability + wipe detection while an experiment is running.

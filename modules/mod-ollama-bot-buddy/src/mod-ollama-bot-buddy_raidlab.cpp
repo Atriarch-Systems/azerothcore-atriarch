@@ -1,5 +1,6 @@
 #include "mod-ollama-bot-buddy_raidlab.h"
 #include "mod-ollama-bot-buddy_cohort.h"
+#include "mod-ollama-bot-buddy_intent.h"
 #include "mod-ollama-bot-buddy_config.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
@@ -166,6 +167,10 @@ ChatCommandTable RaidLabCommandScript::GetCommands() const
         { "start",  HandleStart,  SEC_ADMINISTRATOR, Console::Yes },
         { "status", HandleStatus, SEC_ADMINISTRATOR, Console::Yes },
         { "stop",   HandleStop,   SEC_ADMINISTRATOR, Console::Yes },
+        { "route",  HandleRoute,  SEC_ADMINISTRATOR, Console::Yes },
+        { "go",     HandleGo,     SEC_ADMINISTRATOR, Console::Yes },
+        { "pause",  HandlePause,  SEC_ADMINISTRATOR, Console::Yes },
+        { "step",   HandleStep,   SEC_ADMINISTRATOR, Console::Yes },
     };
 
     static ChatCommandTable commandTable =
@@ -488,18 +493,90 @@ bool RaidLabCommandScript::HandleStart(ChatHandler* handler, std::string instanc
         << ", leader " << leader->GetName() << ", 10-man normal, entrance from " << source;
     Reply(handler, msg.str());
 
-    // Log the strategy set each bot ends up with (ApplyInstanceStrategies
-    // should add raid strategies on entry).
+    // AiPlayerbot.ApplyInstanceStrategies does NOT fire when we teleport bots
+    // in ourselves (verified live: only generic combat strategies attached),
+    // so apply the per-instance set explicitly and log the result.
     for (Player* p : subjects)
     {
-        if (PlayerbotAI* ai = sPlayerbotsMgr.GetPlayerbotAI(p))
-        {
-            std::ostringstream st;
-            for (auto const& s : ai->GetStrategies(BOT_STATE_COMBAT))
-                st << s << ",";
-            LOG_INFO("server.loading", "[RaidLab] {} combat strategies: {}", p->GetName(), st.str());
-        }
+        std::string strategies = Intent::ApplyInstanceStrategies(p);
+        LOG_INFO("server.loading", "[RaidLab] {} combat strategies after explicit apply: {}", p->GetName(), strategies);
     }
+
+    // Arm the intent engine with this group; progression starts on .raidlab go.
+    {
+        std::vector<ObjectGuid> guids;
+        for (Player* p : subjects)
+            guids.push_back(p->GetGUID());
+        Intent::StartRun(info->mapId, guids, 1);
+        Intent::PauseRun(); // explicit .raidlab go begins movement
+        if (Intent::RouteSize() == 0)
+            LOG_INFO("server.loading", "[RaidLab] No route data for map {} - bots will hold at the entrance until a route is seeded.", info->mapId);
+        else
+            Reply(handler, "raidlab: route loaded (" + std::to_string(Intent::RouteSize()) +
+                           " steps). Use '.raidlab go' to begin progression.");
+    }
+    return true;
+}
+
+bool RaidLabCommandScript::HandleRoute(ChatHandler* handler)
+{
+    uint32 mapId = Intent::IsActive() ? Intent::RunMapId() : 0;
+    auto const& route = Intent::GetRoute(mapId);
+    if (route.empty())
+    {
+        Reply(handler, "raidlab route: no route loaded (run .raidlab start first, and seed mod_instance_route for the map)");
+        return true;
+    }
+
+    for (auto const& wp : route)
+    {
+        std::ostringstream line;
+        line << (wp.step == Intent::CurrentStep() ? "-> " : "   ")
+             << wp.step << ". " << wp.label << " [" << wp.kind << "] ("
+             << uint32(wp.x) << ", " << uint32(wp.y) << ", " << uint32(wp.z) << ")";
+        handler->SendSysMessage(line.str().c_str());
+    }
+
+    std::ostringstream sum;
+    sum << "raidlab route: map " << mapId << ", step " << Intent::CurrentStep() << "/" << route.size()
+        << ", status " << Intent::StatusName(Intent::CurrentStatus());
+    Reply(handler, sum.str());
+    return true;
+}
+
+bool RaidLabCommandScript::HandleGo(ChatHandler* handler)
+{
+    if (!Intent::IsActive())
+    {
+        Reply(handler, "raidlab go: no run armed (use .raidlab start <instance> first)");
+        return true;
+    }
+    Intent::ResumeRun();
+    Reply(handler, "raidlab go: progression running from step " + std::to_string(Intent::CurrentStep()));
+    return true;
+}
+
+bool RaidLabCommandScript::HandlePause(ChatHandler* handler)
+{
+    if (!Intent::IsActive())
+    {
+        Reply(handler, "raidlab pause: no run active");
+        return true;
+    }
+    Intent::PauseRun();
+    Reply(handler, "raidlab pause: progression paused at step " + std::to_string(Intent::CurrentStep()));
+    return true;
+}
+
+bool RaidLabCommandScript::HandleStep(ChatHandler* handler, uint32 step)
+{
+    if (!Intent::IsActive())
+    {
+        Reply(handler, "raidlab step: no run active");
+        return true;
+    }
+    Intent::JumpToStep(step);
+    Reply(handler, "raidlab step: jumped to step " + std::to_string(Intent::CurrentStep()));
     return true;
 }
 
@@ -535,6 +612,8 @@ bool RaidLabCommandScript::HandleStatus(ChatHandler* handler)
 
     std::ostringstream sum;
     sum << "raidlab status: alive " << alive << "/" << subjects.size()
+        << " | intent " << Intent::StatusName(Intent::CurrentStatus())
+        << " step " << Intent::CurrentStep()
         << " | wipes " << g_wipes
         << " | instance " << (g_running ? g_instanceKey : std::string("none"))
         << " | elapsed " << (g_running ? uint32(time(nullptr) - g_startedAt) : 0) << "s";
@@ -571,6 +650,7 @@ bool RaidLabCommandScript::HandleStop(ChatHandler* handler)
         }
     }
 
+    Intent::StopRun();
     g_running = false;
     g_deadReported.clear();
     g_bossReported.clear();

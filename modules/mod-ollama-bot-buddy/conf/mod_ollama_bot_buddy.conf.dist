@@ -132,3 +132,39 @@ Rebirth.CohortSize = 500
 #                  Lower it (e.g. 350) to constrain gear meaningfully.
 #     Default:     5000
 RaidLab.GearScore = 5000
+
+########################################
+# Instance intent layer (scripted progression)
+########################################
+# The playerbot AI fights well but has no INTENT: teleported into a raid it
+# stands still. This engine drives a controlled group along authored route
+# data in the characters DB table `mod_instance_route` (seeded for
+# Naxxramas/533 - see that base sql for how to derive routes for other maps),
+# pausing for combat and resuming afterwards. Movement uses navmesh pathing
+# (MotionMaster::MovePoint with generatePath), each member routed
+# independently - no follow chains.
+#
+# Drive it from the raid lab: .raidlab route / go / pause / step <n>.
+# Reused in phase 2 for bot group-leaders guiding player groups and for
+# guild raid nights.
+
+# Intent.Enable
+#     Default: 1
+Intent.Enable = 1
+
+# Intent.AdvanceRadius
+#     Description: Yards from the waypoint that counts as "arrived"; the step
+#                  advances when every living member is within this radius.
+#     Default: 15
+Intent.AdvanceRadius = 15
+
+# Intent.OutOfCombatSeconds
+#     Description: Seconds the group must be out of combat before advancing.
+#     Default: 5
+Intent.OutOfCombatSeconds = 5
+
+# Intent.StuckTimeout
+#     Description: Seconds without advancing before logging "[Intent] stuck at
+#                  step N" with every member's distance to the waypoint.
+#     Default: 120
+Intent.StuckTimeout = 120

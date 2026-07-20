@@ -3,6 +3,7 @@
 #include "mod-ollama-bot-buddy_handler.h"
 #include "mod-ollama-bot-buddy_rebirth.h"
 #include "mod-ollama-bot-buddy_raidlab.h"
+#include "mod-ollama-bot-buddy_intent.h"
 
 #include "Log.h"
 
@@ -16,4 +17,5 @@ void Addmod_ollama_bot_buddyScripts()
     new BotRebirthLoop();
     new RaidLabCommandScript();
     new RaidLabWatcher();
+    new IntentWorldScript();
 }
