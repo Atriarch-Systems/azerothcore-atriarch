@@ -1757,6 +1757,41 @@ namespace
             << ". Quests in log: " << questCount
             << ". Group: " << (bot->GetGroup() ? "yes" : "no") << ".\n";
 
+        // Nearby characters (token-cheap: <=8, nearest first). Real players are
+        // marked so the seeker can notice someone unusual standing next to her.
+        {
+            std::vector<std::pair<float, std::string>> nearby;
+            for (auto const& itr2 : ObjectAccessor::GetPlayers())
+            {
+                Player* other = itr2.second;
+                if (!other || !other->IsInWorld() || other == bot) continue;
+                if (other->GetMapId() != bot->GetMapId()) continue;
+                float dist = bot->GetDistance(other);
+                if (dist > 40.0f) continue;
+                PlayerbotAI* otherAI = sPlayerbotsMgr.GetPlayerbotAI(other);
+                std::string entry = other->GetName() + " (" + std::to_string(uint32(other->GetLevel())) + " "
+                    + ai->GetChatHelper()->FormatClass(other->getClass()) + ", "
+                    + ai->GetChatHelper()->FormatRace(other->getRace()) + ")";
+                if (!otherAI)
+                    entry += " [not a bot]";
+                nearby.emplace_back(dist, entry);
+            }
+            std::sort(nearby.begin(), nearby.end(),
+                [](auto const& a, auto const& b) { return a.first < b.first; });
+            if (!nearby.empty())
+            {
+                oss << "Nearby (within 40yd, nearest first): ";
+                size_t shown = 0;
+                for (auto const& n : nearby)
+                {
+                    if (shown++ >= 8) break;
+                    if (shown > 1) oss << "; ";
+                    oss << n.second;
+                }
+                oss << ".' + BSN + '";
+            }
+        }
+
         auto messages = GetRecentPlayerMessagesToBot(bot);
         if (!messages.empty())
         {
@@ -1794,7 +1829,7 @@ namespace
                "Rules: stay/do_quests/rest let the game AI continue (say line optional). "
                "travel needs a destination name. approach"
             << (seeker ? "/ask_bot" : "")
-            << " needs a character name you have seen or heard about.\n"
+            << " needs a character name from the Nearby list above, or one you have seen or heard about.\n"
                "Example: {\"directive\": \"travel\", \"target\": \"Darkshore\", \"say\": \"The road calls.\"}\n";
 
         return oss.str();
@@ -1938,6 +1973,15 @@ namespace
     };
     std::mutex g_chronicleMutex;
     std::deque<PendingChronicle> g_pendingChronicles;
+
+    // Async one-off lines the seeker should speak once produced (recognition).
+    struct PendingSay
+    {
+        ObjectGuid guid;
+        std::string text;
+    };
+    std::mutex g_pendingSayMutex;
+    std::deque<PendingSay> g_pendingSays;
     std::atomic<bool> g_chronicleBusy { false };
     time_t g_lastChronicleAt = 0;
 
@@ -1976,6 +2020,19 @@ namespace
                 oss << "- " << *it << "\n";
         }
         return oss.str();
+    }
+
+    void DrainPendingSays()
+    {
+        std::deque<PendingSay> local;
+        {
+            std::lock_guard<std::mutex> lock(g_pendingSayMutex);
+            local.swap(g_pendingSays);
+        }
+        for (auto const& ps : local)
+            if (Player* p = ObjectAccessor::FindPlayer(ps.guid))
+                if (p->IsInWorld())
+                    BotBuddyAI::Say(p, ps.text);
     }
 
     void DrainPendingChronicles()
@@ -2131,8 +2188,41 @@ namespace
             if (p->GetMapId() != seekerBot->GetMapId()) continue;
             if (seekerBot->GetDistance(p) > 60.0f) continue;
 
+            // Everything that constitutes the WIN happens synchronously here;
+            // only the spoken line is generated asynchronously, so a slow or
+            // broken LLM can never cost her the recognition.
             seekerBot->GetSocial()->AddToSocialList(p->GetGUID(), SOCIAL_FLAG_FRIEND);
-            BotBuddyAI::Say(seekerBot, "It IS you. I have walked half this world asking after you, " + p->GetName() + ". I am adding you to my list of true friends.");
+
+            {
+                std::string persona = g_OllamaBotControlSeekerPersona;
+                std::string tail = GetChronicleTail(guidRaw, 2);
+                std::string notes = mem.notes;
+                std::string playerName = p->GetName();
+                ObjectGuid seekerGuid = seekerBot->GetGUID();
+                std::string prompt = persona;
+                if (!tail.empty())
+                    prompt += "\n\nYour journey so far:\n" + tail;
+                if (!notes.empty())
+                    prompt += "\nYour notebook:\n" + notes;
+                prompt += "\nYou have just recognized " + playerName +
+                          ", the one real soul you have searched for. Say one short line, in character, "
+                          "at most 25 words, no quotes.";
+
+                std::thread([seekerGuid, prompt, playerName]() {
+                    std::string line = QueryOllamaLLM(prompt);
+                    // Trim whitespace/newlines the model may add
+                    size_t b = line.find_first_not_of(" \t\r\n");
+                    size_t e = line.find_last_not_of(" \t\r\n");
+                    line = (b == std::string::npos) ? "" : line.substr(b, e - b + 1);
+                    if (line.size() > 250)
+                        line = line.substr(0, 250);
+                    if (line.empty())
+                        line = "It IS you. I have walked half this world asking after you, " + playerName + ".";
+                    std::lock_guard<std::mutex> lock(g_pendingSayMutex);
+                    g_pendingSays.push_back({ seekerGuid, line });
+                }).detach();
+            }
+
             mem.state = 1;
             mem.notes += "\n[FOUND] " + p->GetName() + " - the search is over.";
             mem.dirty = true;
@@ -2160,6 +2250,7 @@ void OllamaBotControlLoop::OnUpdate(uint32 /*diff*/)
     // Execute directives produced by worker threads (world thread only)
     DrainPendingDirectives();
     DrainPendingChronicles();
+    DrainPendingSays();
 
     time_t now = time(nullptr);
     static time_t nextMaintenance = 0;
