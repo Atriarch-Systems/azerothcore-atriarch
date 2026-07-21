@@ -10,6 +10,8 @@
 #include "ManagedBotRegistry.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
+// sObjectMgr: taxi-node lookup and path/cost resolution for flight travel.
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
@@ -340,6 +342,52 @@ namespace GuildDungeon
         return oss.str();
     }
 
+    // --- travel -----------------------------------------------------------
+
+    // Put one member on a flight path toward the dungeon. Returns true if a flight started.
+    //
+    // This is a SCRIPTED taxi call (npc == nullptr), which is what makes it usable at all
+    // here: the npc-less branch of ActivateTaxiPathTo skips the flight-master proximity and
+    // "have you discovered this node" checks a real player faces. Orchestrated bots have no
+    // master to walk them to a flight master, and most have never discovered the node, so
+    // the normal path would refuse every time.
+    //
+    // spellid is left at 1 deliberately. With spellid == 0 the core's CONFIG_INSTANT_TAXI
+    // shortcut collapses the whole journey into a teleport, and the journey is the point.
+    bool TryStartFlight(Player* p, Dungeon const& d)
+    {
+        if (!p || !p->IsAlive() || p->IsInFlight() || p->IsInCombat())
+            return false;
+        // ActivateTaxiPathTo refuses these outright; checking first keeps the log quiet.
+        if (p->HasUnitState(UNIT_STATE_STUNNED) || p->HasUnitState(UNIT_STATE_ROOT))
+            return false;
+
+        uint32 team = uint32(p->GetTeamId());
+        uint32 src = sObjectMgr->GetNearestTaxiNode(p->GetPositionX(), p->GetPositionY(),
+                                                    p->GetPositionZ(), p->GetMapId(), team);
+        uint32 dst = sObjectMgr->GetNearestTaxiNode(d.ex, d.ey, d.ez, d.entranceMap, team);
+        if (!src || !dst || src == dst)
+            return false;
+
+        uint32 path = 0, cost = 0;
+        sObjectMgr->GetTaxiPath(src, dst, path, cost);
+        if (!path)
+            return false; // no direct route; caller falls back to walking
+
+        // The fare is charged even on a scripted call, and a level-15 bot is usually broke —
+        // without this the flight silently fails and the group walks into the same death
+        // that stalled the first run. Cover only the shortfall.
+        if (p->GetMoney() < cost)
+            p->ModifyMoney(int32(cost - p->GetMoney()));
+
+        std::vector<uint32> nodes = { src, dst };
+        if (!p->ActivateTaxiPathTo(nodes, nullptr, 1))
+            return false;
+
+        GdLogf("TRAVEL '{}' flying taxi node {} -> {} (cost {})", p->GetName(), src, dst, cost);
+        return true;
+    }
+
     // --- run lifecycle ----------------------------------------------------
 
     bool StartRun(uint32 guildId, uint32 dungeonId, bool force, std::string& err)
@@ -543,28 +591,67 @@ namespace GuildDungeon
 
             case Phase::Traveling:
             {
-                // Overland travel to the instance portal. Ground movement only in
-                // this pass - flight-path integration is a TODO (see report).
-                uint32 arrived = 0;
+                // Travel to the instance portal: fly where a flight path exists, walk the
+                // last stretch, and teleport only as a timeout backstop. Making the journey
+                // is part of the spec, so the taxi is the intended path and not an
+                // optimisation over walking.
+                //
+                // The first live run stalled here permanently with the level-15 anchor lying
+                // dead on the road through Westfall. A corpse can neither walk nor board a
+                // flight, so `arrived` could never reach the full party and the run sat in
+                // this phase until it timed out. Reviving en route is therefore part of
+                // making travel work at all, not a separate nicety: on a long overland trip
+                // the lowest member of a level-banded group WILL occasionally die, and the
+                // run should survive that.
+                uint32 arrived = 0, flying = 0, revived = 0;
                 for (Player* p : members)
                 {
+                    if (!p->IsAlive())
+                    {
+                        p->ResurrectPlayer(0.5f);
+                        p->SpawnCorpseBones();
+                        ++revived;
+                        continue;
+                    }
+
+                    if (p->IsInFlight())
+                    {
+                        ++flying;
+                        continue;
+                    }
+
                     if (p->GetMapId() == d.entranceMap && p->GetDistance(d.ex, d.ey, d.ez) <= 40.0f)
+                    {
                         ++arrived;
-                    else if (p->GetMapId() == d.entranceMap)
+                        continue;
+                    }
+
+                    // Only bother with a flight for genuinely long hops; short ones walk.
+                    if (p->GetMapId() != d.entranceMap || p->GetDistance(d.ex, d.ey, d.ez) > 300.0f)
+                    {
+                        if (TryStartFlight(p, d))
+                        {
+                            ++flying;
+                            continue;
+                        }
+                    }
+
+                    if (p->GetMapId() == d.entranceMap)
                         p->GetMotionMaster()->MovePoint(0, d.ex, d.ey, d.ez, FORCED_MOVEMENT_NONE, 0.f, 0.f, true, false);
                 }
+
+                if (revived)
+                    GdLogf("TRAVEL revived {} member(s) who died en route", revived);
+
                 if (arrived >= members.size())
                 {
-                    GdLog("TRAVEL complete on foot");
+                    GdLog("TRAVEL complete");
                     SetPhase(Phase::Entering);
                 }
                 else if ((now - g_run.phaseAt) > time_t(g_travelSeconds))
                 {
-                    // TODO(flight paths): reuse TaxiAction so the group flies
-                    // between continents/zones instead of this fallback.
-                    GdLogf("TRAVEL timeout after {}s ({} of {} walked there) - teleporting the rest to the portal. "
-                           "TODO: flight-path travel not yet implemented.",
-                           g_travelSeconds, arrived, uint32(members.size()));
+                    GdLogf("TRAVEL timeout after {}s ({} arrived, {} still in the air) - teleporting the rest to the portal",
+                           g_travelSeconds, arrived, flying);
                     SetPhase(Phase::Entering);
                 }
                 break;
@@ -748,10 +835,11 @@ ChatCommandTable GuildDungeonCommandScript::GetCommands() const
     return commandTable;
 }
 
-bool GuildDungeonCommandScript::HandleStart(ChatHandler* handler, uint32 guildId, uint32 dungeonId)
+bool GuildDungeonCommandScript::HandleStart(ChatHandler* handler, uint32 guildId, Optional<uint32> dungeonId)
 {
     std::string err;
-    if (!GuildDungeon::StartRun(guildId, dungeonId, false, err))
+    // Omitted dungeon => 0, which StartRun reads as "first enabled catalog entry".
+    if (!GuildDungeon::StartRun(guildId, dungeonId.value_or(0), false, err))
     {
         handler->SendSysMessage(("guilddungeon start failed: " + err).c_str());
         return true;

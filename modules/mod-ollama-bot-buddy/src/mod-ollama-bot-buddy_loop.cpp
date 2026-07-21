@@ -2108,6 +2108,51 @@ namespace
         }).detach();
     }
 
+    // Director bootstrap (login if offline).
+    //
+    // Directors are named in OllamaBotControl.BotNames but, unlike the seeker, were never
+    // force-logged-in — they were left to arrive through the normal random-bot rotation.
+    // Out of a 1200-character pool that rotation never picked them: both directors sat
+    // offline at level 1 for days while director mode was switched on, so the LLM loop
+    // below had no subject and did nothing at all. Being logged in is a precondition for
+    // the whole feature, not an optimisation.
+    //
+    // Mirrors SeekerMaintenance deliberately: same AddPlayerBot force-login, same 60s retry
+    // throttle so a mis-typed name cannot spin. The seeker is skipped here because
+    // DirectorBotNames() folds it in and SeekerMaintenance already owns it.
+    void DirectorMaintenance()
+    {
+        if (g_OllamaBotControlBotNames.empty())
+            return;
+
+        static time_t nextLoginAttempt = 0;
+        time_t now = time(nullptr);
+        if (now < nextLoginAttempt)
+            return;
+        nextLoginAttempt = now + 60;
+
+        for (std::string const& name : DirectorBotNames())
+        {
+            if (!g_OllamaBotControlSeekerName.empty()
+                && ToLowerCopy(name) == ToLowerCopy(g_OllamaBotControlSeekerName))
+                continue;
+
+            if (ObjectAccessor::FindPlayerByName(name))
+                continue; // already in world
+
+            ObjectGuid guid = sCharacterCache->GetCharacterGuidByName(name);
+            if (!guid)
+            {
+                LOG_ERROR("server.loading", "[OllamaBotBuddy][Director] No character named '{}' exists. "
+                    "Set OllamaBotControl.BotNames to existing (bot) characters.", name);
+                continue;
+            }
+
+            LOG_INFO("server.loading", "[OllamaBotBuddy][Director] Logging in director '{}'", name);
+            sRandomPlayerbotMgr.AddPlayerBot(guid, 0);
+        }
+    }
+
     // Seeker bootstrap (login if offline) + win condition. Called every few seconds.
     void SeekerMaintenance()
     {
@@ -2258,6 +2303,7 @@ void OllamaBotControlLoop::OnUpdate(uint32 /*diff*/)
     {
         nextMaintenance = now + 3;
         SeekerMaintenance();
+        DirectorMaintenance();
     }
 
     for (std::string const& name : DirectorBotNames())

@@ -1,6 +1,9 @@
 #pragma once
 #include "Chat.h"
 #include "ObjectGuid.h"
+// Optional<> in the HandleStart signature — included explicitly rather than relying on
+// Chat.h pulling it in transitively.
+#include "Optional.h"
 #include "ScriptMgr.h"
 #include <string>
 #include <unordered_map>
@@ -112,7 +115,10 @@ public:
     GuildDungeonCommandScript();
     Acore::ChatCommands::ChatCommandTable GetCommands() const override;
 
-    static bool HandleStart(ChatHandler* handler, uint32 guildId, uint32 dungeonId);
+    // dungeonId is Optional so `.guilddungeon start <guildId>` parses: as a plain uint32 the
+    // command parser demanded both arguments, which made StartRun's "0 = first enabled
+    // catalog entry" fallback unreachable from the command line.
+    static bool HandleStart(ChatHandler* handler, uint32 guildId, Optional<uint32> dungeonId);
     static bool HandleForce(ChatHandler* handler, uint32 guildId);
     static bool HandleStatus(ChatHandler* handler);
     static bool HandleAbort(ChatHandler* handler);
