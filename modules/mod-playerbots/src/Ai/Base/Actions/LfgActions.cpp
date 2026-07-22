@@ -294,6 +294,26 @@ bool LfgTeleportAction::Execute(Event event)
         p >> out;
     }
 
+    // The master (real player) is leaving via the LFG teleport (either the exit
+    // AreaTrigger or the Dungeon Finder "Teleport" button). If this bot is still
+    // inside a dungeon map and its group's LFG run is still active (not finished
+    // or disbanded), don't mirror the exit - stay put instead of being stranded
+    // outside with the whole party. The moment the player walks back in or
+    // re-queues, the "out == false" mirror below brings the bot back in for
+    // free, so this only blocks the leaving direction.
+    // Map::IsDungeon() (not Instanceable()) on purpose: Instanceable() also
+    // covers battlegrounds/arenas, which should still be mirrored unconditionally.
+    if (out)
+    {
+        Map* map = bot->GetMap();
+        Group* group = bot->GetGroup();
+        if (map && map->IsDungeon() && group && sLFGMgr->GetState(group->GetGUID()) == LFG_STATE_DUNGEON)
+        {
+            botAI->TellMaster("I'll hold here - dungeon run's still active.");
+            return false;
+        }
+    }
+
     bot->ClearUnitState(UNIT_STATE_ALL_STATE);
 
     WorldPacket* packet = new WorldPacket(CMSG_LFG_TELEPORT);

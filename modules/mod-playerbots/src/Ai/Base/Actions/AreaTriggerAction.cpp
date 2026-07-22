@@ -6,8 +6,11 @@
 
 #include "AreaTriggerAction.h"
 
+#include "DBCStores.h"
 #include "Event.h"
 #include "LastMovementValue.h"
+#include "LFGMgr.h"
+#include "Map.h"
 #include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
 #include "Transport.h"
@@ -26,7 +29,8 @@ bool ReachAreaTriggerAction::Execute(Event event)
     if (!at)
         return false;
 
-    if (!sObjectMgr->GetAreaTriggerTeleport(triggerId))
+    AreaTriggerTeleport const* teleport = sObjectMgr->GetAreaTriggerTeleport(triggerId);
+    if (!teleport)
     {
         WorldPacket p1(CMSG_AREATRIGGER);
         p1 << triggerId;
@@ -41,6 +45,32 @@ bool ReachAreaTriggerAction::Execute(Event event)
         botAI->TellError(PlayerbotTextMgr::instance().GetBotTextOrDefault(
             "area_trigger_follow_too_far_error", "I won't follow: too far away", {}));
         return true;
+    }
+
+    // Don't chase the master out of an active LFG dungeon run through this
+    // specific trigger if its teleport target would take the bot off the
+    // current dungeon map to a non-dungeon destination (e.g. an exit portal).
+    // Triggers that keep the bot on the same map, that lead further into a
+    // dungeon (another dungeon-flagged destination map), or that fire when no
+    // active run is in progress (finished/disbanded), are left untouched.
+    if (Map* map = bot->GetMap())
+    {
+        if (map->IsDungeon() && teleport->target_mapId != bot->GetMapId())
+        {
+            MapEntry const* targetMapEntry = sMapStore.LookupEntry(teleport->target_mapId);
+            bool targetIsDungeon = targetMapEntry && targetMapEntry->IsDungeon();
+            if (!targetIsDungeon)
+            {
+                if (Group* group = bot->GetGroup())
+                {
+                    if (sLFGMgr->GetState(group->GetGUID()) == lfg::LFG_STATE_DUNGEON)
+                    {
+                        botAI->TellMaster("I'll hold here - dungeon run's still active.");
+                        return true;
+                    }
+                }
+            }
+        }
     }
 
     bot->GetMotionMaster()->MovePoint(

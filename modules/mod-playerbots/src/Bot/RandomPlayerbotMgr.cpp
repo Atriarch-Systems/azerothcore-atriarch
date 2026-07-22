@@ -1477,6 +1477,14 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
 
      uint32 botId = bot->GetGUID().GetCounter();
 
+    // Track recency of being inside a dungeon so a bot stranded just outside
+    // one (see the LfgTeleportAction / ReachAreaTriggerAction "don't mirror the
+    // exit" fix) can be given a grace period below before the idle cycle
+    // scatters it elsewhere.
+    if (Map* currentMap = bot->GetMap())
+        if (currentMap->IsDungeon())
+            lastSeenInDungeonMap[botId] = NowSeconds();
+
     // if death revive
     if (bot->isDead())
     {
@@ -1524,6 +1532,24 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
 
     if (idleBot)
     {
+        // Grace period: a bot whose master is a real player, and which was
+        // recently part of an active dungeon run, should not be randomized or
+        // teleported away while stranded just outside it - give the LFG
+        // "don't mirror the exit" fix (or the player manually walking back in)
+        // a chance to reunite the group first.
+        Player* master = botAI->GetMaster();
+        PlayerbotAI* masterBotAI = master ? GET_PLAYERBOT_AI(master) : nullptr;
+        if (masterBotAI && masterBotAI->IsRealPlayer())
+        {
+            auto lastSeen = lastSeenInDungeonMap.find(botId);
+            if (lastSeen != lastSeenInDungeonMap.end())
+            {
+                uint32 graceSeconds = sPlayerbotAIConfig.lfgStrandedGraceMinutes * MINUTE;
+                if (graceSeconds && (NowSeconds() - lastSeen->second) < graceSeconds)
+                    return false;
+            }
+        }
+
         // randomize
         uint32 randomize = GetEventValue(botId, "randomize");
         if (!randomize)

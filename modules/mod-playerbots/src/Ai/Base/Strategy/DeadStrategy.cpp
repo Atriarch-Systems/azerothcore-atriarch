@@ -21,7 +21,7 @@ void DeadStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
     triggers.push_back(new TriggerNode(
         "corpse near", { NextAction("revive from corpse", relevance - 1.0f) }));
     triggers.push_back(new TriggerNode("resurrect request",
-                                       { NextAction("accept resurrect", relevance) }));
+                                       { NextAction("accept resurrect", relevance + 1.0f) }));
     triggers.push_back(
         new TriggerNode("falling far", { NextAction("repop", relevance + 1.f) }));
     triggers.push_back(

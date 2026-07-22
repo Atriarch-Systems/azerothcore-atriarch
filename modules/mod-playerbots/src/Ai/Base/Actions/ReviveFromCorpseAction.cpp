@@ -178,7 +178,16 @@ bool FindCorpseAction::Execute(Event /*event*/)
     }
     else
     {
-        if (bot->isMoving())
+        if (bot->GetMapId() != moveToPos.GetMapId())
+        {
+            // MoveTo() is not map-aware and would path using the corpse's raw x/y/z on the bot's
+            // current map, sending the bot wandering off in the wrong direction. Teleport across
+            // maps instead, the same way the !AllowActivity branch above already does.
+            bot->GetMotionMaster()->Clear();
+            bot->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TELEPORTED | AURA_INTERRUPT_FLAG_CHANGE_MAP);
+            moved = bot->TeleportTo(moveToPos.GetMapId(), moveToPos.GetPositionX(), moveToPos.GetPositionY(), moveToPos.GetPositionZ(), 0);
+        }
+        else if (bot->isMoving())
             moved = true;
         else
         {

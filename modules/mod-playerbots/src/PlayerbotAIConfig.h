@@ -165,6 +165,12 @@ public:
     uint32 minRandomBotsPriceChangeInterval, maxRandomBotsPriceChangeInterval;
     uint32 disabledWithoutRealPlayerLoginDelay, disabledWithoutRealPlayerLogoutDelay;
     bool randomBotJoinLfg;
+    // Grace period (minutes) during which an idle random bot whose master is a
+    // real player, and which was recently inside an active dungeon run, is
+    // exempt from the idle randomize/teleport cycle - so it isn't scattered
+    // away before the LFG "don't mirror the exit" fix (or the player manually
+    // returning) has a chance to reunite the group.
+    uint32 lfgStrandedGraceMinutes;
 
     // Professions
     bool enableFishingWithMaster;

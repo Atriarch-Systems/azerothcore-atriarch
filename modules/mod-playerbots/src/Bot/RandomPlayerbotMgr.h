@@ -247,6 +247,11 @@ private:
     std::map<uint32, std::map<uint32, std::vector<WorldLocation>>> rpgLocsCacheLevel;
     std::map<TeamId, std::map<BattlegroundTypeId, std::vector<uint32>>> BattleMastersCache;
     std::unordered_map<uint32, BotEventCache> eventCache;
+    // botId -> NowSeconds() timestamp this bot was last observed on a dungeon
+    // map. Used to grant a short grace period, exempting a bot grouped with a
+    // real player from the idle randomize/teleport cycle right after it was
+    // recently part of an active LFG dungeon run (see ProcessBot()).
+    std::unordered_map<uint32, time_t> lastSeenInDungeonMap;
     std::list<uint32> currentBots;
     uint32 bgBotsCount;
     uint32 playersLevel;

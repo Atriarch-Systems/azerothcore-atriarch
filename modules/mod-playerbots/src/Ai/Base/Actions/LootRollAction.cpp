@@ -10,6 +10,7 @@
 #include "Group.h"
 #include "ItemUsageValue.h"
 #include "LootAction.h"
+#include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
@@ -83,6 +84,44 @@ bool LootRollAction::Execute(Event /*event*/)
                     break;
             }
         }
+
+        // Defer to real (non-bot) players already registered in this roll. This runs on the
+        // pre-dial, usage-derived vote -- before the two downgrade dials below -- so that
+        // (a) "vote already PASS/DISENCHANT" below means the bot has no genuine use for the
+        // item at all, not that policy already suppressed it, and (b) a vote we force to GREED
+        // here still passes through the lootGreedRollLevel dial exactly like any other GREED
+        // vote (see report for the config values needed for this to actually reach the wire).
+        bool realPlayerNeeds = false;
+        bool realPlayerUndecided = false;
+        for (auto const& [voterGuid, voterVote] : roll->playerVote)
+        {
+            if (voterGuid == bot->GetGUID())
+                continue;
+
+            Player* voter = ObjectAccessor::FindPlayer(voterGuid);
+            if (!voter || GET_PLAYERBOT_AI(voter))
+                continue; // offline/gone, or another bot -- only real players affect this bot's vote
+
+            if (voterVote == NEED)
+                realPlayerNeeds = true;
+            else if (voterVote == NOT_EMITED_YET)
+                realPlayerUndecided = true;
+        }
+
+        // A real player hasn't declared intent on this roll yet -- wait for them rather than
+        // guess. The existing "very often" RandomTrigger re-invokes this action every few
+        // seconds and will re-poll; Group::EndRoll's server-side timeout is the backstop, so
+        // this never stalls forever.
+        if (realPlayerUndecided)
+            continue;
+
+        // Never out-NEED a real player who already needs it. Fall back to GREED instead of
+        // passing outright, so the item can still be sold via the auction house (or vendored
+        // if soulbound) rather than wasted. Leave PASS/DISENCHANT alone -- those mean the bot
+        // has no use for the item at all, not that it merely lost NEED priority.
+        if (realPlayerNeeds && vote == NEED)
+            vote = GREED;
+
         if (vote == NEED)
         {
             if (sPlayerbotAIConfig.lootNeedRollLevel == 0 || RollUniqueCheck(proto, bot))
