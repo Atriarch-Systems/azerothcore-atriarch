@@ -7,6 +7,7 @@
 
 #include "AuctionHouseMgr.h"
 #include "ChatHelper.h"
+#include "Config.h"
 #include "Event.h"
 #include "GameTime.h"
 #include "GuildMgr.h"
@@ -19,6 +20,10 @@
 #include "ServerFacade.h"
 #include "GuildMgr.h"
 #include "BroadcastHelper.h"
+
+#include <algorithm>
+#include <mutex>
+#include <unordered_map>
 
 bool LootAction::Execute(Event /*event*/)
 {
@@ -276,6 +281,32 @@ uint32 StoreLootAction::RoundPrice(double price)
     return (uint32)(price / 10000.0) * 10000;
 }
 
+namespace
+{
+    // Per-bot active-auction count, cached for a few minutes. Auctions aren't indexed by owner -
+    // the only way to count a bot's live listings is a full scan of the house's auction map, which
+    // is too expensive to repeat for every single listing attempt across hundreds of autonomous
+    // sellers. Key is (houseId << 32 | owner guid low) so the count is scoped to the house the bot
+    // is actually listing in (two-sided-interaction config folds everything to Neutral upstream of
+    // here, so the key stays consistent). Mutex-guarded because bot AI can run from map-update
+    // contexts.
+    struct BotAuctionCount
+    {
+        time_t validUntil = 0;
+        uint32 count = 0;
+    };
+
+    constexpr time_t BOT_AUCTION_COUNT_CACHE_TTL = 3 * MINUTE;
+
+    std::mutex botAuctionCountLock;
+    std::unordered_map<uint64, BotAuctionCount> botAuctionCountCache;
+
+    uint64 BotAuctionCountKey(AuctionHouseEntry const* ahEntry, Player const* bot)
+    {
+        return (uint64(ahEntry->houseId) << 32) | bot->GetGUID().GetCounter();
+    }
+}
+
 // This was previously dead code (wrapped in a block comment) written against an older
 // AuctionHouseMgr/AuctionEntry API that has since drifted - see docs/session-improvements-2026-07-21.md
 // item 6. Rewritten against the current core API (cross-checked against the real player packet
@@ -340,6 +371,31 @@ bool StoreLootAction::AuctionItem(uint32 itemId, PlayerbotAI* botAI)
     if (!auctionHouse)
         return false;
 
+    // Per-bot active-auction cap - without one, hundreds of autonomous sellers grow their listing
+    // footprint without bound. Uses the cached per-bot count (see BotAuctionCount above) instead of
+    // rescanning the house per item; the cache is bumped locally on every successful listing so the
+    // cap holds within the TTL window too.
+    static uint32 const maxActiveAuctionsPerBot =
+        sConfigMgr->GetOption<uint32>("AiPlayerbot.MaxActiveAuctionsPerBot", 10);
+    uint64 const countKey = BotAuctionCountKey(ahEntry, bot);
+    if (maxActiveAuctionsPerBot)
+    {
+        std::lock_guard<std::mutex> lock(botAuctionCountLock);
+        BotAuctionCount& cached = botAuctionCountCache[countKey];
+        if (cached.validUntil <= GameTime::GetGameTime().count())
+        {
+            cached.count = 0;
+            for (auto const& auctionPair : auctionHouse->GetAuctions())
+                if (auctionPair.second->owner == bot->GetGUID())
+                    ++cached.count;
+
+            cached.validUntil = GameTime::GetGameTime().count() + BOT_AUCTION_COUNT_CACHE_TTL;
+        }
+
+        if (cached.count >= maxActiveAuctionsPerBot)
+            return false;
+    }
+
     uint32 stackCount = item->GetCount();
 
     double basePrice = double(stackCount) * double(proto->BuyPrice) * sRandomPlayerbotMgr.GetBuyMultiplier(bot);
@@ -357,6 +413,14 @@ bool StoreLootAction::AuctionItem(uint32 itemId, PlayerbotAI* botAI)
         return false;
 
     uint32 buyoutPrice = RoundPrice(double(urand(bidPrice, 4 * bidPrice / 3)));
+
+    // Price floor: the occasional underprice roll above (and RoundPrice truncation) must never
+    // produce a listing below what a vendor would pay for the stack - otherwise buying the bot out
+    // and vendoring the item is free money, and the bot would have been better off vendoring it
+    // itself. Clamp bid first, then buyout, so buyout >= bid is preserved.
+    uint32 const vendorValue = proto->SellPrice * stackCount + 1;
+    bidPrice = std::max(bidPrice, vendorValue);
+    buyoutPrice = std::max(buyoutPrice, bidPrice);
 
     uint32 auctionTime = uint32(MIN_AUCTION_TIME * sWorld->getRate(RATE_AUCTION_TIME));
 
@@ -392,6 +456,15 @@ bool StoreLootAction::AuctionItem(uint32 itemId, PlayerbotAI* botAI)
     auctionEntry->SaveToDB(trans);
     bot->SaveInventoryAndGoldToDB(trans);
     CharacterDatabase.CommitTransaction(trans);
+
+    // Keep the cached per-bot listing count honest between full rescans (no-op if the cap is
+    // disabled - the cache entry only exists when the cap check above ran).
+    {
+        std::lock_guard<std::mutex> lock(botAuctionCountLock);
+        auto const cachedItr = botAuctionCountCache.find(countKey);
+        if (cachedItr != botAuctionCountCache.end())
+            ++cachedItr->second.count;
+    }
 
     LOG_INFO("playerbots", "Playerbot {} listed {} of {} on the auction house for {}..{} copper (deposit {})",
               bot->GetName(), stackCount, proto->Name1, bidPrice, buyoutPrice, deposit);

@@ -58,6 +58,7 @@ public:
         creators["uninvite guid"] = &WorldPacketTriggerContext::uninvite_guid;
         creators["lfg join"] = &WorldPacketTriggerContext::lfg_update;
         creators["lfg proposal"] = &WorldPacketTriggerContext::lfg_proposal;
+        creators["lfg boot proposal"] = &WorldPacketTriggerContext::lfg_boot_proposal;
         creators["lfg role check"] = &WorldPacketTriggerContext::lfg_role_check;
         creators["lfg leave"] = &WorldPacketTriggerContext::lfg_leave;
         creators["guild invite"] = &WorldPacketTriggerContext::guild_invite;
@@ -83,6 +84,7 @@ private:
     static Trigger* lfg_teleport(PlayerbotAI* botAI) { return new WorldPacketTrigger(botAI, "lfg teleport"); }
     static Trigger* lfg_leave(PlayerbotAI* botAI) { return new WorldPacketTrigger(botAI, "lfg leave"); }
     static Trigger* lfg_proposal(PlayerbotAI* botAI) { return new WorldPacketTrigger(botAI, "lfg proposal"); }
+    static Trigger* lfg_boot_proposal(PlayerbotAI* botAI) { return new WorldPacketTrigger(botAI, "lfg boot proposal"); }
     static Trigger* lfg_role_check(PlayerbotAI* botAI) { return new WorldPacketTrigger(botAI, "lfg role check"); }
     static Trigger* lfg_update(PlayerbotAI* botAI) { return new WorldPacketTrigger(botAI, "lfg join"); }
     static Trigger* uninvite(PlayerbotAI* botAI) { return new WorldPacketTrigger(botAI, "uninvite"); }

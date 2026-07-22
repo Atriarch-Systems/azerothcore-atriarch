@@ -59,11 +59,20 @@ public:
         // AH-tagged BoE items are worth more sold on the auction house than dumped on a vendor
         // (ItemUsageValue::Calculate() only tags sellable, non-soulbound, Normal-quality+ BoE items
         // this way in the first place) - route those through the real auction path instead of the
-        // vendor-sell packet below. Falls through to the normal vendor sell if no auctioneer is in
-        // range or the listing otherwise fails (AuctionItem() returns false without side effects),
-        // so "s vendor"/"s *" still get rid of the item one way or another.
-        if (usage == ITEM_USAGE_AH && StoreLootAction::AuctionItem(item->GetEntry(), botAI))
-            return true;
+        // vendor-sell packet below.
+        if (usage == ITEM_USAGE_AH)
+        {
+            if (StoreLootAction::AuctionItem(item->GetEntry(), botAI))
+                return true;
+
+            // No auctioneer in range (or the listing failed / hit the per-bot cap): KEEP the item
+            // in the bags so the periodic auto-auction pass gets a chance at it, instead of
+            // shredding its AH value on a vendor. Only when the bags are nearly full (same >= 90%
+            // threshold SmartDestroyItemAction uses) is the vendor fallback allowed, so bots don't
+            // clog themselves hoarding unlistable stock.
+            if (context->GetValue<uint8>("bag space")->Get() < 90)
+                return true;
+        }
 
         return SellItemsVisitor::Visit(item);
     }
@@ -149,10 +158,13 @@ void SellAction::Sell(Item* item)
 
 bool AutoAuctionSellAction::isUseful()
 {
-    // Unattended/random bots only - a bot with a real, currently-active player master shouldn't
-    // silently list that player's loot on the AH behind their back. Those bots still have full
-    // manual control via the "s vendor"/"s *"/"s [item link]" chat commands above either way.
-    return sPlayerbotAIConfig.autoAuctionSell && !botAI->HasActivePlayerMaster();
+    // Unattended RANDOM bots only - a bot with a real, currently-active player master shouldn't
+    // silently list that player's loot on the AH behind their back, and !HasActivePlayerMaster()
+    // alone is not enough: a personal (non-random) bot whose owner is merely OFFLINE also has no
+    // active master, and would liquidate its owner's items the moment they log out. Real players
+    // still have full manual control via the "s vendor"/"s *"/"s [item link]" chat commands above.
+    return sPlayerbotAIConfig.autoAuctionSell && !botAI->HasActivePlayerMaster() &&
+           sRandomPlayerbotMgr.IsRandomBot(bot);
 }
 
 bool AutoAuctionSellAction::Execute(Event /*event*/)

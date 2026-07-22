@@ -18,6 +18,7 @@
 #include "Playerbots.h"
 
 #include "BattlefieldScript.h"
+#include "BotAuctionOutcomeScript.h"
 #include "Channel.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
@@ -541,6 +542,7 @@ void AddPlayerbotsScripts()
     new PlayerbotsWorldScript();
     new PlayerbotsScript();
     new PlayerBotsBGScript();
+    new BotAuctionOutcomeScript();
     AddPlayerbotsSecureLoginScripts();
     AddPlayerbotsCommandscripts();
     PlayerBotsGuildValidationScript();

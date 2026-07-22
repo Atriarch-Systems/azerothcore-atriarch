@@ -21,6 +21,7 @@
 #include "InventoryChangeFailureAction.h"
 #include "LeaveGroupAction.h"
 #include "LfgActions.h"
+#include "LfgBootVoteAction.h"
 #include "LfgLatecomerAction.h"
 #include "LootAction.h"
 #include "LootRollAction.h"
@@ -109,6 +110,7 @@ public:
         creators["petition sign"] = &WorldPacketActionContext::petition_sign;
         creators["lfg join"] = &WorldPacketActionContext::lfg_join;
         creators["lfg accept"] = &WorldPacketActionContext::lfg_accept;
+        creators["lfg boot vote"] = &WorldPacketActionContext::lfg_boot_vote;
         creators["lfg role check"] = &WorldPacketActionContext::lfg_role_check;
         creators["lfg leave"] = &WorldPacketActionContext::lfg_leave;
         creators["lfg teleport"] = &WorldPacketActionContext::lfg_teleport;
@@ -177,6 +179,7 @@ private:
     static Action* lfg_teleport(PlayerbotAI* botAI) { return new LfgTeleportAction(botAI); }
     static Action* lfg_leave(PlayerbotAI* botAI) { return new LfgLeaveAction(botAI); }
     static Action* lfg_accept(PlayerbotAI* botAI) { return new LfgAcceptAction(botAI); }
+    static Action* lfg_boot_vote(PlayerbotAI* botAI) { return new LfgBootVoteAction(botAI); }
     static Action* lfg_role_check(PlayerbotAI* botAI) { return new LfgRoleCheckAction(botAI); }
     static Action* lfg_join(PlayerbotAI* botAI) { return new LfgJoinAction(botAI); }
     static Action* see_spell(PlayerbotAI* botAI) { return new SeeSpellAction(botAI); }

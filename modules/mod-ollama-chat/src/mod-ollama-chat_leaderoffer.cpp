@@ -34,6 +34,8 @@ namespace
 
     // Deterministic yes/no confirmation keywords for a pending offer's reply. No LLM call
     // here: this gates a real Group::ChangeLeader, so the match stays plain and boring.
+    // Matched against the LEADING word of the reply (see MatchesLeadingWord), so "yes
+    // please", "sure thing", "yeah man" all confirm.
     std::vector<std::string> const g_AffirmativeReplies =
     {
         "y",
@@ -45,6 +47,19 @@ namespace
         "do it",
         "ok",
         "okay"
+    };
+
+    // Explicit declines. Matched the same leading-word way, so "no thanks" / "nah, keep it"
+    // decline cleanly. Any reply that is neither affirmative nor negative leaves the offer
+    // pending until it expires on its own.
+    std::vector<std::string> const g_NegativeReplies =
+    {
+        "no",
+        "nah",
+        "nope",
+        "cancel",
+        "nevermind",
+        "never mind"
     };
 
     std::string ToLowerCopy(std::string const& text)
@@ -68,11 +83,39 @@ namespace
         return text.substr(start, end - start + 1);
     }
 
-    bool IsAffirmativeReply(std::string const& lowerTrimmedMsg)
+    // True when the reply's LEADING word (everything before the first space/punctuation of
+    // the already-lowercased, trimmed message) equals one of the given keywords. Multi-word
+    // keywords ("do it", "never mind") can never equal a single token, so those are matched
+    // as a leading phrase followed by end-of-message or a word boundary instead.
+    bool MatchesLeadingWord(std::string const& lowerTrimmedMsg, std::vector<std::string> const& words)
     {
-        for (std::string const& word : g_AffirmativeReplies)
+        if (lowerTrimmedMsg.empty())
+            return false;
+
+        // Apostrophe deliberately NOT a token boundary: "y'know..." must tokenize as
+        // "y'know" (matching nothing), not "y" (an affirmative) -- otherwise a reply
+        // like "y'know what, never mind" would CONFIRM the transfer it was declining.
+        size_t const tokenEnd = lowerTrimmedMsg.find_first_of(" \t.,!?;:\"");
+        std::string const token = (tokenEnd == std::string::npos)
+            ? lowerTrimmedMsg
+            : lowerTrimmedMsg.substr(0, tokenEnd);
+
+        for (std::string const& word : words)
         {
-            if (lowerTrimmedMsg == word)
+            if (word == token)
+                return true;
+
+            if (word.find(' ') == std::string::npos)
+                continue;
+
+            if (lowerTrimmedMsg.compare(0, word.size(), word) != 0)
+                continue;
+
+            if (lowerTrimmedMsg.size() == word.size())
+                return true;
+
+            char const next = lowerTrimmedMsg[word.size()];
+            if (next == ' ' || std::ispunct(static_cast<unsigned char>(next)))
                 return true;
         }
         return false;
@@ -133,19 +176,41 @@ bool TryHandleLeaderOfferChat(Player* player, PlayerbotAI* botAI, std::string co
             }
             else if (it->second.botGuid == botGuid)
             {
-                // Live offer addressed to this specific bot -- resolve it one way or another.
-                g_LeaderOffers.erase(it);
-                lock.unlock();
-
+                // Live offer addressed to this specific bot. Only an explicit yes or an
+                // explicit no resolves it; anything else ("sec", "one moment", ordinary
+                // chatter) leaves it pending so it can still be answered until it expires
+                // on its own.
                 std::string const lowerTrimmedMsg = ToLowerCopy(TrimCopy(msg));
-                if (IsAffirmativeReply(lowerTrimmedMsg))
+                if (MatchesLeadingWord(lowerTrimmedMsg, g_AffirmativeReplies))
                 {
+                    g_LeaderOffers.erase(it);
+                    lock.unlock();
+
+                    // Leadership can have moved (disband, manual /promote, another module)
+                    // between the offer and this confirmation -- queueing the transfer
+                    // anyway would be acting on authority the bot no longer has.
+                    if (!bot->GetGroup() || !bot->GetGroup()->IsLeader(bot->GetGUID()))
+                    {
+                        SayLeaderReply(botAI, bot, "I'm not the leader anymore.");
+                        return true;
+                    }
+
                     QueueLeaderTransfer(bot, player);
                     SayLeaderReply(botAI, bot, "All yours.");
+                    return true;
                 }
-                // Anything else cancels the offer with zero state change -- never retry,
-                // never guess.
-                return true;
+                if (MatchesLeadingWord(lowerTrimmedMsg, g_NegativeReplies))
+                {
+                    g_LeaderOffers.erase(it);
+                    lock.unlock();
+
+                    SayLeaderReply(botAI, bot, "Alright, I'll keep lead.");
+                    return true;
+                }
+                // Neither: fall through with the offer intact. Step 2 below may still
+                // treat this same message as a fresh leadership request (re-asking simply
+                // refreshes the offer), and returning false otherwise lets normal chat
+                // processing continue untouched.
             }
             // else: a live offer exists for this player but it's addressed to a different
             // bot -- leave it alone and fall through, in case this message is *also* a fresh

@@ -75,6 +75,15 @@ struct NewRpgInfo
     uint32 stuckTs{0};
     uint32 stuckAttempts{0};
     WorldPosition moveFarPos;
+    // Flight-before-teleport one-shot latch (docs/playerbot-realistic-travel.md, step 4).
+    // Set by MoveFarTo's first stuck-fire when TryFlightInsteadOfTeleport commits to a
+    // flightmaster: moveFarFlightMasterPos remembers WHICH flightmaster so arrival there
+    // actually boards the taxi, and moveFarFlightAttempted makes any later stuck-fire for
+    // the same destination skip the flight attempt and fall through to the teleport
+    // backstop instead of re-walking to an unreachable flightmaster forever. Both cleared
+    // by SetMoveFarTo whenever the far destination changes.
+    bool moveFarFlightAttempted{false};
+    WorldPosition moveFarFlightMasterPos;
     // END MOVE_FAR
 
     using RpgData = std::variant<

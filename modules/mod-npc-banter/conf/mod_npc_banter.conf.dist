@@ -75,15 +75,12 @@ NpcBanter.MaxConcurrentQueries = 1
 NpcBanter.CacheReuseChance = 50
 
 # NpcBanter.NumPredict
-#     Description: Advisory token/word budget folded into the prompt's own
-#                  length instruction. Tighter than OllamaChat.NumPredict=60 -
-#                  ambient barks are shorter than conversational replies.
-#                  NOTE: this does NOT set the request's actual num_predict
-#                  option - see the "Deviations" note in the delivering
-#                  agent's report for why (NpcBanter shares mod-ollama-chat's
-#                  QueryOllamaAPI/QueryManager call path verbatim, which
-#                  always builds its request options from mod-ollama-chat's
-#                  OWN OllamaChat.NumPredict).
+#     Description: Token budget for banter generations. Sent as the request's
+#                  actual num_predict option (overriding OllamaChat.NumPredict
+#                  for banter queries only) and also folded into the prompt's
+#                  own length instruction. Tighter than OllamaChat.NumPredict=60
+#                  - ambient barks are shorter than conversational replies.
+#                  Set 0 to inherit OllamaChat.NumPredict for the request.
 #     Default:     25
 NpcBanter.NumPredict = 25
 
@@ -94,9 +91,18 @@ NpcBanter.NumPredict = 25
 #                  is discarded and a canned line is used instead - never
 #                  regenerated (a retry is a second GPU call). Leave blank to
 #                  disable the filter entirely.
-#     Example:     NpcBanter.BannedTopics = politics,religion,real-world news
+#                  Because matching is plain substring, entries must be words
+#                  that would literally appear in bad output - abstract topic
+#                  labels ("politics", "sexual content") never occur verbatim
+#                  in a bad reply, so they filter nothing. The defaults below
+#                  target the real failure mode: the model breaking character
+#                  or referencing the real world. Bare "AI" is deliberately
+#                  absent (as a substring it matches "said", "wait",
+#                  "captain", ...); a false positive only costs a canned
+#                  line, so mildly broad entries like "assistant" are fine.
+#     Example:     NpcBanter.BannedTopics = language model,chatbot,real world
 #     Default:     (curated list below)
-NpcBanter.BannedTopics = politics,religion,real-world news,current events,sexual content
+NpcBanter.BannedTopics = as an AI,language model,assistant,chatbot,president,america,real world,out of character,OOC
 
 # --------------------------------------------
 # CANNED-LINE FALLBACK

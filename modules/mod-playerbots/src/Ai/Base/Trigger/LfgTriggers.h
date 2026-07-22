@@ -9,8 +9,6 @@
 
 #include "Trigger.h"
 
-#include <ctime>
-
 class PlayerbotAI;
 
 class LfgProposalActiveTrigger : public Trigger
@@ -29,21 +27,19 @@ public:
     bool IsActive() override;
 };
 
-// Fires for an LFG group's leader bot once it has been inside a dungeon instance for at least
-// AiPlayerbot.Lfg.LatecomerGraceSeconds and a real (non-playerbot) group member still hasn't
-// zoned in. Paired with LfgSummonLatecomerAction via the "lfg" strategy (LfgStrategy.cpp). See
-// docs/dungeon-leadership-and-summon.md, section 3a.
+// Fires for an LFG group's leader bot while it is inside a dungeon instance and a real
+// (non-playerbot) group member has been outside that instance for at least
+// AiPlayerbot.Lfg.LatecomerGraceSeconds. Paired with LfgSummonLatecomerAction via the "lfg"
+// strategy (LfgStrategy.cpp). See docs/dungeon-leadership-and-summon.md, section 3a.
 //
 // The 30s checkInterval below doubles as the "don't re-attempt more than once every 30s" cooldown
 // called for by the design doc -- Trigger::needCheck() (Trigger.cpp) already skips IsActive()
 // entirely between checks, so no separate cooldown bookkeeping is needed.
 //
-// "Time since this bot entered its current instance" is tracked here as plain members on this
-// Trigger instance rather than a static/global guid-keyed map: one Trigger object already exists
-// per bot for the lifetime of its "lfg" strategy (created once via TriggerContext's factory), so a
-// member timestamp is already bot-scoped. It is recomputed (and implicitly cleared) whenever the
-// bot's current map/instance id no longer matches what was last observed, which also covers "bot
-// left the map".
+// All grace-period bookkeeping (per-member "last seen inside my instance" timestamps, with the
+// bot's own instance-entry time as fallback for members never seen inside) lives in
+// LfgLatecomerValue (LfgValues.h) so the trigger, the action's isUseful() and the action's
+// Execute() all agree on the same per-member grace decision.
 class LfgLatecomerTrigger : public Trigger
 {
 public:
@@ -51,11 +47,6 @@ public:
 
     bool IsActive() override;
     std::string const GetTargetName() override { return "lfg latecomer"; }
-
-private:
-    uint32 lastMapId = 0;
-    uint32 lastInstanceId = 0;
-    time_t enteredInstanceAt = 0;
 };
 
 #endif

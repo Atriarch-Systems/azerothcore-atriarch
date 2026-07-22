@@ -77,7 +77,13 @@ protected:
     // route exists, the flightmaster is out of ground-leg range, or
     // AiPlayerbot.RealisticTravel.FlightBeforeTeleport is off - callers fall through to their
     // existing backstop unchanged.
-    bool TryFlightInsteadOfTeleport(WorldPosition const& dest);
+    //
+    // If chosenFmPos is non-null it receives the position of the flightmaster this call
+    // committed to (only meaningful when the call returns true; left untouched on the
+    // already-airborne early return). Callers use it as a one-shot latch: remember the
+    // flightmaster so a later tick can re-invoke this function on arrival to actually board,
+    // and so a second stuck/retry fire for the same destination can skip the flight attempt.
+    bool TryFlightInsteadOfTeleport(WorldPosition const& dest, WorldPosition* chosenFmPos = nullptr);
 
 protected:
     struct CheckAngle

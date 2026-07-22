@@ -39,8 +39,26 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
 
     if (dest != botAI->rpgInfo.moveFarPos)
     {
-        // clear stuck information if it's a new dest
+        // clear stuck information (and the flight latch) if it's a new dest
         botAI->rpgInfo.SetMoveFarTo(dest);
+    }
+
+    // Flight-before-teleport latch, arrival half: a previous stuck-fire committed this
+    // destination to a taxi ride and recorded the chosen flightmaster. Once within interact
+    // range of it, re-invoke the taxi activation immediately - without this, nothing
+    // remembers the intent, so on arrival MoveFarTo would resume pathing toward dest (away
+    // from the flightmaster) and boarding only ever happened if a later stuck-fire
+    // coincided with standing next to the NPC.
+    if (botAI->rpgInfo.moveFarFlightAttempted && botAI->rpgInfo.moveFarFlightMasterPos != WorldPosition() &&
+        bot->GetMapId() == botAI->rpgInfo.moveFarFlightMasterPos.GetMapId() &&
+        bot->GetDistance(botAI->rpgInfo.moveFarFlightMasterPos) <= INTERACTION_DISTANCE * 2)
+    {
+        if (TryFlightInsteadOfTeleport(dest))
+            return true;
+
+        // Could not board (flightmaster missing/dead or fare refusal): stop re-checking
+        // arrival and let the stuck path below fall through to its teleport backstop.
+        botAI->rpgInfo.moveFarFlightMasterPos = WorldPosition();
     }
 
     // performance optimization
@@ -101,10 +119,24 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
         // instead (docs/playerbot-realistic-travel.md, step 4). Gated behind
         // AiPlayerbot.RealisticTravel.FlightBeforeTeleport; returns false (falls through to the
         // teleport below, unchanged) if disabled, no route exists, or the flightmaster is out
-        // of ground-leg range - this never adds a new indefinite retry, it just spends the one
-        // stuck-timeout slot that would have teleported on a flight attempt instead.
-        if (TryFlightInsteadOfTeleport(dest))
-            return true;
+        // of ground-leg range.
+        //
+        // One-shot latch: only the FIRST stuck-fire for this destination gets to spend its
+        // recovery slot on a flight attempt, and the chosen flightmaster is recorded so the
+        // arrival check at the top of this function boards on reaching it. A second
+        // stuck-fire while latched (e.g. the flightmaster turned out to be mmap-unreachable)
+        // skips the attempt and falls through to the teleport backstop, so recovery is never
+        // starved indefinitely.
+        if (!botAI->rpgInfo.moveFarFlightAttempted)
+        {
+            WorldPosition fmPos;
+            if (TryFlightInsteadOfTeleport(dest, &fmPos))
+            {
+                botAI->rpgInfo.moveFarFlightAttempted = true;
+                botAI->rpgInfo.moveFarFlightMasterPos = fmPos;
+                return true;
+            }
+        }
 
         const AreaTableEntry* entry = sAreaTableStore.LookupEntry(bot->GetZoneId());
         std::string zone_name = PlayerbotAI::GetLocalizedAreaName(entry);

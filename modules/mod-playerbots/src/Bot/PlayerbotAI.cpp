@@ -198,6 +198,7 @@ PlayerbotAI::PlayerbotAI(Player* bot)
     botOutgoingPacketHandlers.AddHandler(SMSG_BATTLEFIELD_STATUS, "bg status");
     botOutgoingPacketHandlers.AddHandler(SMSG_LFG_ROLE_CHECK_UPDATE, "lfg role check");
     botOutgoingPacketHandlers.AddHandler(SMSG_LFG_PROPOSAL_UPDATE, "lfg proposal");
+    botOutgoingPacketHandlers.AddHandler(SMSG_LFG_BOOT_PROPOSAL_UPDATE, "lfg boot proposal");
     botOutgoingPacketHandlers.AddHandler(SMSG_TEXT_EMOTE, "receive text emote");
     botOutgoingPacketHandlers.AddHandler(SMSG_EMOTE, "receive emote");
     botOutgoingPacketHandlers.AddHandler(SMSG_LOOT_START_ROLL, "master loot roll");
@@ -441,6 +442,18 @@ void PlayerbotAI::UpdateAIGroupMaster()
     if (!master || (masterBotAI && !masterBotAI->IsRealPlayer()))
     {
         Player* newMaster = FindNewMaster();
+
+        // FindNewMaster() only nominates a bot (the instance tank fallback) while the group is
+        // inside a dungeon map. If it now finds nobody while the current master is still a bot,
+        // that tank has left the group or the group has ported out of the dungeon -- clear the
+        // sticky bot master instead of following it forever. Real-player masters are unaffected:
+        // a real player's GET_PLAYERBOT_AI is nullptr, so masterBotAI is nullptr for them and
+        // this branch was only entered because master itself was nullptr.
+        if (!newMaster && masterBotAI && !masterBotAI->IsRealPlayer())
+        {
+            SetMaster(nullptr);
+            return;
+        }
 
         // Only (re)apply master/strategy state when it is actually changing. Before the all-bot
         // instance tank fallback in FindNewMaster(), this outer guard re-triggering every tick was

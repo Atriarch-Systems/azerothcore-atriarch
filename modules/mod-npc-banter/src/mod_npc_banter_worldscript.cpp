@@ -119,14 +119,22 @@ namespace
     {
         ++g_activeQueries;
 
+        // Banter barks are deliberately shorter than conversational bot replies, so
+        // NpcBanter.NumPredict overrides OllamaChat.NumPredict for this one request (0
+        // inherits the OllamaChat value). Built here on the world thread so the worker
+        // lambda keeps touching nothing but its own captured copies.
+        OllamaQueryOptions queryOpts;
+        if (g_NpcBanterNumPredict > 0)
+            queryOpts.numPredict = g_NpcBanterNumPredict;
+
         std::thread([creatureGuid, mapId, instanceId, playerGuid,
                      prompt = std::move(prompt), archetypeKey = std::move(archetypeKey),
-                     cannedFallback = std::move(cannedFallback)]()
+                     cannedFallback = std::move(cannedFallback), queryOpts = std::move(queryOpts)]()
         {
             std::string text;
             try
             {
-                std::future<std::string> future = g_queryManager.submitQuery(prompt);
+                std::future<std::string> future = g_queryManager.submitQuery(prompt, queryOpts);
                 text = future.get();
             }
             catch (std::exception const&)
@@ -164,6 +172,12 @@ void NpcBanterWorldScript::OnUpdate(uint32 /*diff*/)
     if (now < nextTick)
         return;
     nextTick = now + time_t(g_NpcBanterTickSeconds);
+
+    // At most ONE spoken line (or LLM dispatch) per tick across all registered
+    // NPCs. During an idle stretch every NPC's cooldown expires and stays
+    // expired, so the first player to arrive would otherwise set off every
+    // in-range NPC within a tick or two - a wall of simultaneous barks.
+    bool spokeThisTick = false;
 
     for (ObjectGuid const& guid : sNpcBanterRegistry.SnapshotGuids())
     {
@@ -204,6 +218,16 @@ void NpcBanterWorldScript::OnUpdate(uint32 /*diff*/)
         if (state.lastGreetedGuid == nearest->GetGUID() && (now - state.lastGreetedAt) < 5)
             continue;
 
+        // Per-tick burst cap: someone already spoke this tick, so defer this
+        // NPC with a short re-roll (NOT the full cooldown, and NOT recorded as
+        // a greet) - the burst becomes a staggered trickle over the next ticks.
+        if (spokeThisTick)
+        {
+            state.nextBanterAt = now + time_t(urand(5, 45));
+            sNpcBanterRegistry.Update(guid, state);
+            continue;
+        }
+
         state.lastGreetedGuid = nearest->GetGUID();
         state.lastGreetedAt = now;
         state.nextBanterAt = RollNextCooldown(now);
@@ -219,16 +243,23 @@ void NpcBanterWorldScript::OnUpdate(uint32 /*diff*/)
             {
                 sNpcBanterRegistry.Update(guid, state);
                 SpeakToPlayer(creature, nearest, cached);
+                spokeThisTick = true;
                 continue;
             }
         }
 
-        // Tier 2 (immediate): our own sub-cap is full - never queue, never
-        // wait, just say the canned line instead.
+        // Tier 2 (deferral): our own sub-cap is full - never queue, never
+        // wait. Instead of burning a canned line, push the NPC back a few
+        // seconds so it gets a real shot at the LLM once a slot frees up.
+        // The canned fallback stays reserved for actual LLM failures and
+        // banned-topic trips (baked into the dispatch below). The short
+        // re-roll overwrites the full cooldown set just above; the greet
+        // fields it also set are harmless since the re-roll is >= the
+        // 5-second refire-suppressor window.
         if (g_activeQueries.load() >= g_NpcBanterMaxConcurrentQueries)
         {
+            state.nextBanterAt = now + time_t(urand(5, 45));
             sNpcBanterRegistry.Update(guid, state);
-            SpeakToPlayer(creature, nearest, cannedFallback);
             continue;
         }
 
@@ -244,5 +275,6 @@ void NpcBanterWorldScript::OnUpdate(uint32 /*diff*/)
 
         DispatchLlmBanter(guid, state.mapId, state.instanceId, nearest->GetGUID(),
             std::move(prompt), state.archetypeKey, std::move(cannedFallback));
+        spokeThisTick = true;
     }
 }

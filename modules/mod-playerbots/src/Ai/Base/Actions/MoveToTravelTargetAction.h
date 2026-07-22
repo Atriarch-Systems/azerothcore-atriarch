@@ -18,6 +18,17 @@ public:
 
     bool Execute(Event event) override;
     bool isUseful() override;
+
+private:
+    // Flight-before-teleport one-shot latch (docs/playerbot-realistic-travel.md, step 4),
+    // the per-action twin of NewRpgInfo's MOVE_FAR latch: when a max-retry fire commits a
+    // travel destination to a taxi ride, remember that destination and the chosen
+    // flightmaster so arrival at the flightmaster actually boards, and so a later
+    // max-retry fire for the same destination skips the flight attempt and falls through
+    // to the retry-cooldown backstop. Keyed by destination, so a changed travel target
+    // naturally invalidates the latch.
+    WorldPosition flightAttemptDest;
+    WorldPosition flightAttemptFmPos;
 };
 
 #endif

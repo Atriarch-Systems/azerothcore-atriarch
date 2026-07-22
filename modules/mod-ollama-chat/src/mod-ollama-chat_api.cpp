@@ -21,8 +21,16 @@ std::string ExtractTextBetweenDoubleQuotes(const std::string& response)
     return response;
 }
 
-// Function to perform the API call.
+// Function to perform the API call. Classic single-argument form: no per-request
+// overrides, module-wide OllamaChat.* config only.
 std::string QueryOllamaAPI(const std::string& prompt)
+{
+    return QueryOllamaAPI(prompt, {});
+}
+
+// Function to perform the API call, with optional per-request overrides. Every field left
+// empty in opts falls back to the corresponding module-wide OllamaChat.* config value.
+std::string QueryOllamaAPI(const std::string& prompt, OllamaQueryOptions const& opts)
 {
     // Initialize our custom HTTP client
     static OllamaHttpClient httpClient;
@@ -54,8 +62,9 @@ std::string QueryOllamaAPI(const std::string& prompt)
     bool hasOptions = false;
 
     // Only include if set (do not send defaults if user did not set them)
-    if (g_OllamaNumPredict > 0) {
-        options["num_predict"] = g_OllamaNumPredict;
+    uint32_t const numPredict = opts.numPredict.value_or(g_OllamaNumPredict);
+    if (numPredict > 0) {
+        options["num_predict"] = numPredict;
         hasOptions = true;
     }
     if (g_OllamaTemperature != 0.8f) {
@@ -116,17 +125,19 @@ std::string QueryOllamaAPI(const std::string& prompt)
         if (!stopSeqs.empty())
             requestData["stop"] = stopSeqs;
     }
-    if (!g_OllamaSystemPrompt.empty())
+    std::string const systemPrompt = opts.systemPrompt.value_or(g_OllamaSystemPrompt);
+    if (!systemPrompt.empty())
     {
         // Sanitize system prompt as well
-        requestData["system"] = SanitizeUTF8(g_OllamaSystemPrompt);
+        requestData["system"] = SanitizeUTF8(systemPrompt);
     }
 
     // Always send the think flag explicitly: thinking-capable models (e.g.
     // gemma4) default to thinking when the flag is omitted, which burns the
     // token budget on reasoning and returns an empty response field.
-    requestData["think"] = g_ThinkModeEnableForModule;
-    if (g_ThinkModeEnableForModule)
+    bool const thinkEnabled = opts.think.value_or(g_ThinkModeEnableForModule);
+    requestData["think"] = thinkEnabled;
+    if (thinkEnabled)
     {
         if(g_DebugEnabled)
         {
@@ -211,7 +222,7 @@ std::string QueryOllamaAPI(const std::string& prompt)
     {
         LOG_INFO("server.loading", "[Ollama Chat] Parsed bot response: {}", botReply);
 
-        if (g_ThinkModeEnableForModule)
+        if (thinkEnabled)
         {
             if(g_DebugEnabled)
             {

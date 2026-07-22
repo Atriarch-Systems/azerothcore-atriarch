@@ -242,6 +242,14 @@ public:
             return false;
         }
 
+        // The bot may have lost leadership between this operation being queued and executed
+        // (another leader change, group re-form); only the current leader may hand leadership on.
+        if (!group->IsLeader(m_botGuid))
+        {
+            LOG_DEBUG("playerbots", "GroupSetLeaderOperation: Bot is no longer the group leader");
+            return false;
+        }
+
         group->ChangeLeader(newLeader->GetGUID());
         group->SendUpdate();
         LOG_DEBUG("playerbots", "GroupSetLeaderOperation: Changed leader to {}", newLeader->GetName());

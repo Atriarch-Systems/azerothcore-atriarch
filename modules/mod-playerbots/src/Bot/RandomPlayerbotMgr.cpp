@@ -1480,10 +1480,40 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
     // Track recency of being inside a dungeon so a bot stranded just outside
     // one (see the LfgTeleportAction / ReachAreaTriggerAction "don't mirror the
     // exit" fix) can be given a grace period below before the idle cycle
-    // scatters it elsewhere.
+    // scatters it elsewhere. Only record/refresh the timestamp while the bot's
+    // group contains at least one real player at that moment: the grace gate
+    // below matters after a disband (when group and master are already gone),
+    // so this recorded state is the only reliable way to tell "was just in a
+    // dungeon run with a human" from an all-bot run that should be recycled.
     if (Map* currentMap = bot->GetMap())
+    {
         if (currentMap->IsDungeon())
-            lastSeenInDungeonMap[botId] = NowSeconds();
+        {
+            bool groupHasRealPlayer = false;
+            if (Group* botGroup = bot->GetGroup())
+            {
+                for (Group::MemberSlot const& slot : botGroup->GetMemberSlots())
+                {
+                    Player* member = ObjectAccessor::FindPlayer(slot.guid);
+                    if (!member)
+                        continue;
+
+                    // GET_PLAYERBOT_AI is non-null for self-bot ("player botAI") humans too --
+                    // they get a shell AI with IsRealPlayer() == true. Only a non-null AI with
+                    // IsRealPlayer() == false is an actual bot.
+                    PlayerbotAI* memberBotAI = GET_PLAYERBOT_AI(member);
+                    if (!memberBotAI || memberBotAI->IsRealPlayer())
+                    {
+                        groupHasRealPlayer = true;
+                        break;
+                    }
+                }
+            }
+
+            if (groupHasRealPlayer)
+                lastSeenInDungeonMap[botId] = NowSeconds();
+        }
+    }
 
     // if death revive
     if (bot->isDead())
@@ -1532,22 +1562,22 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
 
     if (idleBot)
     {
-        // Grace period: a bot whose master is a real player, and which was
-        // recently part of an active dungeon run, should not be randomized or
-        // teleported away while stranded just outside it - give the LFG
-        // "don't mirror the exit" fix (or the player manually walking back in)
-        // a chance to reunite the group first.
-        Player* master = botAI->GetMaster();
-        PlayerbotAI* masterBotAI = master ? GET_PLAYERBOT_AI(master) : nullptr;
-        if (masterBotAI && masterBotAI->IsRealPlayer())
+        // Grace period: a bot recently seen inside a dungeon while grouped
+        // with a real player (see the lastSeenInDungeonMap write above) should
+        // not be randomized or teleported away right after that run fell apart
+        // (disband, port-out, the player stepping outside) - give the LFG
+        // "don't mirror the exit" fix (or the player manually regrouping) a
+        // chance to reunite the run first. No master/group check here: by the
+        // time the post-disband case reaches this point, master has already
+        // been cleared by UpdateAIGroupMaster and the group is gone; bots
+        // still grouped under a real-player leader never get this far at all
+        // (ProcessBot(uint32) and RandomBotUpdateAction both return early).
+        auto lastSeen = lastSeenInDungeonMap.find(botId);
+        if (lastSeen != lastSeenInDungeonMap.end())
         {
-            auto lastSeen = lastSeenInDungeonMap.find(botId);
-            if (lastSeen != lastSeenInDungeonMap.end())
-            {
-                uint32 graceSeconds = sPlayerbotAIConfig.lfgStrandedGraceMinutes * MINUTE;
-                if (graceSeconds && (NowSeconds() - lastSeen->second) < graceSeconds)
-                    return false;
-            }
+            uint32 graceSeconds = sPlayerbotAIConfig.lfgStrandedGraceMinutes * MINUTE;
+            if (graceSeconds && (NowSeconds() - lastSeen->second) < graceSeconds)
+                return false;
         }
 
         // randomize
@@ -3172,6 +3202,7 @@ void RandomPlayerbotMgr::Remove(Player* bot)
 
     uint32 botId = owner.GetCounter();
     eventCache.erase(botId);
+    lastSeenInDungeonMap.erase(botId);
 
     LogoutPlayerBot(owner);
 }

@@ -186,6 +186,15 @@ bool FindCorpseAction::Execute(Event /*event*/)
             bot->GetMotionMaster()->Clear();
             bot->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TELEPORTED | AURA_INTERRUPT_FLAG_CHANGE_MAP);
             moved = bot->TeleportTo(moveToPos.GetMapId(), moveToPos.GetPositionX(), moveToPos.GetPositionY(), moveToPos.GetPositionZ(), 0);
+
+            if (!moved)
+            {
+                // TeleportTo can fail outright (instance full, instance bind mismatch, LFG
+                // restriction); without a fallback the bot would retry this branch forever and
+                // stay a ghost, since the ProcessBot revive backstop never fires while grouped.
+                // Fall back to the spirit healer the same way the same-map branch below does.
+                moved = botAI->DoSpecificAction("spirit healer", Event(), true);
+            }
         }
         else if (bot->isMoving())
             moved = true;

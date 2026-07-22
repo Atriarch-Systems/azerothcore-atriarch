@@ -24,22 +24,9 @@ bool LfgLatecomerTrigger::IsActive()
 
     Map* map = bot->GetMap();
     if (!map || !map->IsDungeon())
-    {
-        lastMapId = 0;
-        lastInstanceId = 0;
-        enteredInstanceAt = 0;
-        return false;
-    }
-
-    if (bot->GetMapId() != lastMapId || bot->GetInstanceId() != lastInstanceId)
-    {
-        lastMapId = bot->GetMapId();
-        lastInstanceId = bot->GetInstanceId();
-        enteredInstanceAt = time(nullptr);
-    }
-
-    if (!enteredInstanceAt || time(nullptr) - enteredInstanceAt < sPlayerbotAIConfig.lfgLatecomerGraceSeconds)
         return false;
 
+    // The grace period (per member, from when the member actually left the bot's instance) is
+    // evaluated inside LfgLatecomerValue::Calculate() -- see LfgValues.h.
     return AI_VALUE(Unit*, "lfg latecomer") != nullptr;
 }

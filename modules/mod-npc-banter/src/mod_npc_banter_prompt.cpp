@@ -59,8 +59,39 @@ std::string SanitizeNpcBanterResponse(std::string text)
     // certainly the model ignoring the length instruction rather than a
     // legitimate long reply, so it is clipped rather than spoken in full.
     constexpr size_t kMaxLen = 400;
-    if (text.size() > kMaxLen)
+    bool const clipped = text.size() > kMaxLen;
+    if (clipped)
         text = text.substr(0, kMaxLen);
+
+    // A clipped reply - or one the model's own token budget cut off mid-word
+    // (it ends on a letter/digit instead of punctuation) - shouldn't be spoken
+    // trailing off mid-sentence. Trim back to the last sentence terminator if
+    // one exists past ~40% of the text (so a single early "." doesn't eat most
+    // of the line), else drop the trailing word fragment at the last space.
+    bool const endsMidWord =
+        !text.empty() && std::isalnum(static_cast<unsigned char>(text.back())) != 0;
+    if (clipped || endsMidWord)
+    {
+        size_t const lastTerminator = text.find_last_of(".!?");
+        if (lastTerminator != std::string::npos && lastTerminator >= (text.size() * 2) / 5)
+            text = text.substr(0, lastTerminator + 1);
+        else
+        {
+            size_t const lastSpace = text.find_last_of(' ');
+            if (lastSpace != std::string::npos && lastSpace > 0)
+                text = text.substr(0, lastSpace);
+        }
+
+        // Either trim can leave dangling separators ("Prices are fair," / "eh -").
+        while (!text.empty())
+        {
+            char const back = text.back();
+            if (back == ' ' || back == ',' || back == ';' || back == ':' || back == '-')
+                text.pop_back();
+            else
+                break;
+        }
+    }
 
     return text;
 }

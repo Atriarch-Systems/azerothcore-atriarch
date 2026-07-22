@@ -85,6 +85,8 @@ void NewRpgInfo::SetMoveFarTo(WorldPosition pos)
     stuckTs = 0;
     stuckAttempts = 0;
     moveFarPos = pos;
+    moveFarFlightAttempted = false;
+    moveFarFlightMasterPos = WorldPosition();
 }
 
 NewRpgStatus NewRpgInfo::GetStatus()

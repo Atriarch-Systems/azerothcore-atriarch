@@ -6,6 +6,7 @@
 
 #include "LfgLatecomerAction.h"
 
+#include "Config.h"
 #include "Event.h"
 #include "MeetingStoneSummonHelper.h"
 #include "Playerbots.h"
@@ -33,6 +34,29 @@ bool LfgSummonLatecomerAction::Execute(Event /*event*/)
     if (!latecomer || !latecomer->IsInWorld())
         return false;
 
+    time_t const now = time(nullptr);
+
+    // Drop backoff entries whose time has passed so the map stays bounded over a long uptime.
+    for (auto it = summonRetryAt.begin(); it != summonRetryAt.end();)
+    {
+        if (it->second <= now)
+            it = summonRetryAt.erase(it);
+        else
+            ++it;
+    }
+
+    // A summon offer is already pending on this player's screen (ours from an earlier pass, or
+    // e.g. a warlock's) -- using the stone again would just re-send SMSG_SUMMON_REQUEST and reset
+    // their 2-minute accept window, which is exactly the popup spam this guards against.
+    if (latecomer->GetSummonExpireTimer() > now)
+        return false;
+
+    // A previous offer's window ran out with the player still outside (decline and ignore are
+    // indistinguishable server-side) -- hold off before offering again. Entries past their time
+    // were pruned above, so any remaining entry means "still backing off".
+    if (summonRetryAt.find(latecomerGuid) != summonRetryAt.end())
+        return false;
+
     GameObject* meetingStone =
         MeetingStoneSummonHelper::FindNearestRealMeetingStone(bot, LFG_MEETING_STONE_SEARCH_RANGE);
     if (!meetingStone)
@@ -45,6 +69,16 @@ bool LfgSummonLatecomerAction::Execute(Event /*event*/)
 
     if (!MeetingStoneSummonHelper::SummonPlayerViaMeetingStone(bot, latecomer, meetingStone))
         return false;
+
+    // Inline config read cached in a function-local static; a later consolidation pass will move
+    // this into PlayerbotAIConfig.
+    static uint32 const summonRetryMinutes =
+        sConfigMgr->GetOption<uint32>("AiPlayerbot.Lfg.SummonRetryMinutes", 5);
+
+    // Don't offer this player another summon until the 2-minute accept window of the offer just
+    // sent (MAX_PLAYER_SUMMON_DELAY, Player.h) has expired AND the retry backoff has passed.
+    summonRetryAt[latecomerGuid] =
+        now + time_t(MAX_PLAYER_SUMMON_DELAY) + time_t(summonRetryMinutes * MINUTE);
 
     LOG_INFO("playerbots", "Bot {} <{}>: used meeting stone to summon late group member {}",
              bot->GetGUID().ToString().c_str(), bot->GetName().c_str(), latecomer->GetName().c_str());

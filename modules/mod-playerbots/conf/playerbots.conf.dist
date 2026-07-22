@@ -468,6 +468,10 @@ AiPlayerbot.ApplyInstanceStrategies = 1
 # Default: 1 (enabled)
 AiPlayerbot.AutoAvoidAoe = 1
 
+# Also apply the avoid-aoe strategy to masterless bot groups
+# Default: 1 (enabled)
+AiPlayerbot.AutoAvoidAoeForBots = 1
+
 # Only avoid aoe spells with a radius smaller than this value
 AiPlayerbot.MaxAoeAvoidRadius = 15.0
 
@@ -724,6 +728,72 @@ AiPlayerbot.RandomBotJoinLfg = 1
 # to be reunited automatically or by the player walking back in.
 # Default: 15
 AiPlayerbot.Lfg.StrandedGraceMinutes = 15
+
+# Master switch for the auto-hand-leadership-to-real-player trigger on LFG-formed
+# groups. OFF by default: a bot that ends up leading an LFG group just keeps
+# leading, and a real player asks for lead via chat ("give me lead" -> confirm).
+# Flipping this on restores the old always-force-leadership-onto-the-player
+# behavior.
+# Default: 0 (disabled)
+AiPlayerbot.Lfg.AutoLeaderHandoff = 0
+
+# Grace period, in seconds, after an LFG group enters the dungeon before the
+# group's leader bot attempts a meeting-stone summon for a real group member
+# who hasn't zoned in yet (also the per-member grace after a member leaves the
+# instance mid-run before re-offering a summon).
+# Default: 60
+AiPlayerbot.Lfg.LatecomerGraceSeconds = 60
+
+# Window, in seconds, for a player to confirm a "give me lead" offer before it
+# expires.
+# Default: 60
+AiPlayerbot.Lfg.LeaderOfferTimeoutSeconds = 60
+
+# After a meeting-stone summon offer expires unanswered (2-minute native summon
+# window), wait this many minutes before offering the same member another
+# summon. Prevents popup spam for a player who deliberately stepped outside.
+# Default: 5
+AiPlayerbot.Lfg.SummonRetryMinutes = 5
+
+# Bots automatically vote YES on LFG vote-kicks (boot votes). Without this a
+# solo real player can never kick a bot (3 votes needed) and each attempt
+# locks the group for 2 minutes.
+# Default: 1 (enabled)
+AiPlayerbot.Lfg.AutoBootVote = 1
+
+# Let managed-group followers (e.g. guild-dungeon rally/travel cohorts) keep
+# the new-rpg/rpg strategies instead of standing idle.
+# Default: 1 (enabled)
+AiPlayerbot.ManagedGroupRpgStrategies = 1
+
+# Try a real taxi flight before MoveFarTo / travel-target actions give up and
+# teleport the remaining distance.
+# Default: 1 (enabled)
+AiPlayerbot.RealisticTravel.FlightBeforeTeleport = 1
+
+# Prefer a real taxi flight over an instant relocation when the ambient
+# random-teleport system moves a leaderless bot between zones.
+# Default: 0 (disabled; visibly slows perceived bot repositioning)
+AiPlayerbot.RandomTeleportPreferFlight = 0
+
+# Give up on the flight (fall back to the plain teleport) past this many taxi
+# legs when RandomTeleportPreferFlight is enabled.
+# Default: 2
+AiPlayerbot.RandomTeleportFlightMaxHops = 2
+
+# Unattended random bots periodically list sellable (ITEM_USAGE_AH) loot on the
+# auction house through a nearby auctioneer NPC.
+# Default: 0 (disabled)
+AiPlayerbot.AutoAuctionSell = 0
+
+# Handle random bots' auction outcomes directly (credit sale gold, return
+# expired items to bags) instead of sending mail the bots never read.
+# Default: 1 (enabled)
+AiPlayerbot.AuctionOutcomeDirect = 1
+
+# Maximum simultaneous active auctions per bot; 0 disables the cap.
+# Default: 10
+AiPlayerbot.MaxActiveAuctionsPerBot = 10
 
 # Enable/Disable periodic online - offline of randombots to mimic the real-world scenario where not all players are online simultaneously
 # When enabled, randombots are randomly selected to go online or offline periodically from a larger set

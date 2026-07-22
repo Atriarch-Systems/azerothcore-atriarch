@@ -50,6 +50,7 @@ void WorldPacketHandlerStrategy::InitTriggers(std::vector<TriggerNode*>& trigger
     triggers.push_back(new TriggerNode("petition offer", { NextAction("petition sign", relevance) }));
     triggers.push_back(new TriggerNode("lfg proposal", { NextAction("lfg accept", relevance) }));
     triggers.push_back(new TriggerNode("lfg proposal active", { NextAction("lfg accept", relevance) }));
+    triggers.push_back(new TriggerNode("lfg boot proposal", { NextAction("lfg boot vote", relevance) }));
     triggers.push_back(new TriggerNode("arena team invite", { NextAction("arena team accept", relevance) }));
     //triggers.push_back(new TriggerNode("no non bot players around", { NextAction("delay", relevance) }));
     triggers.push_back(new TriggerNode("bg status", { NextAction("bg status", relevance) }));

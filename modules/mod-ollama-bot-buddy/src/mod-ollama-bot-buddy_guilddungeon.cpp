@@ -46,7 +46,11 @@ namespace
     uint32 g_wipeGraceSeconds = 60;
     uint32 g_lootGraceSeconds = 20;
     uint32 g_rallySeconds = 120;      // max time to wait for the group to gather
-    uint32 g_travelSeconds = 600;     // max overland travel time before giving up and teleporting
+    uint32 g_travelSeconds = 600;     // max overland travel time before advancing without stragglers
+    uint32 g_enterSeconds = 120;      // max time in Phase::Entering before the run aborts -
+                                      // bounds repeated TeleportTo refusals (instance cap, bind
+                                      // mismatch, level gate) that would otherwise log once a
+                                      // second until the global MaxRunMinutes abort
     bool   g_debug = true;
 
     // Phase::AtMeetingStone (docs/dungeon-leadership-and-summon.md, section 3b): bounded pause at
@@ -939,8 +943,11 @@ namespace GuildDungeon
                 }
                 else if ((now - g_run.phaseAt) > time_t(travelBudget))
                 {
+                    // No teleport happens here: stragglers are left where they are, and
+                    // Phase::Entering's TeleportTo is what eventually pulls anyone not yet at
+                    // the entrance into the instance.
                     GdLogf("TRAVEL timeout after {}s ({} arrived, {} flying, {} walking to a flightmaster) - "
-                           "teleporting the rest to the portal",
+                           "advancing to the meeting-stone checkpoint without the stragglers",
                            travelBudget, arrived, flying, walkingToFm);
                     SetPhase(Phase::AtMeetingStone);
                 }
@@ -995,6 +1002,18 @@ namespace GuildDungeon
 
             case Phase::Entering:
             {
+                // Per-phase time budget, mirroring Phase::Traveling's travelBudget above: if
+                // TeleportTo keeps getting refused (instance cap, bind mismatch, level gate),
+                // this phase would otherwise re-log the refusal once a second until the global
+                // MaxRunMinutes abort. Checked first so the early returns below (waiting for
+                // the leader's ack/bind) can never starve it.
+                if ((now - g_run.phaseAt) > time_t(g_enterSeconds))
+                {
+                    GdLogf("ENTER timeout after {}s - aborting run", g_enterSeconds);
+                    AbortRun("entering timeout");
+                    return;
+                }
+
                 // Leader enters FIRST and we wait for the instance bind, so
                 // every member lands in the same instance id. Teleporting all
                 // five at once races InstanceMap::AddPlayerToMap and can create
@@ -1116,6 +1135,7 @@ void GuildDungeonWorldScript::OnStartup()
     g_lootGraceSeconds  = sConfigMgr->GetOption<uint32>("GuildDungeon.LootGraceSeconds", 20);
     g_rallySeconds      = sConfigMgr->GetOption<uint32>("GuildDungeon.RallySeconds", 120);
     g_travelSeconds     = sConfigMgr->GetOption<uint32>("GuildDungeon.TravelSeconds", 600);
+    g_enterSeconds      = sConfigMgr->GetOption<uint32>("GuildDungeon.EnterSeconds", 120);
     g_debug             = sConfigMgr->GetOption<bool>("GuildDungeon.Debug", true);
 
     g_realFlightMaster      = sConfigMgr->GetOption<bool>("GuildDungeon.RealFlightMaster", true);

@@ -8,8 +8,6 @@
 
 #include "Event.h"
 #include "LastMovementValue.h"
-#include "AiObjectContext.h"
-#include "ManagedBotRegistry.h"
 #include "Playerbots.h"
 
 bool RememberTaxiAction::Execute(Event event)
@@ -48,27 +46,4 @@ bool RememberTaxiAction::Execute(Event event)
     }
 
     return false;
-}
-
-void RememberTaxiAction::RememberManagedTaxi(PlayerbotAI* followerAI, ObjectGuid taxiMaster,
-                                             std::vector<uint32> const& taxiNodes)
-{
-    if (!followerAI || taxiNodes.empty())
-        return;
-
-    Player* bot = followerAI->GetBot();
-    if (!bot)
-        return;
-
-    bool managed = sManagedBotRegistry.IsManagedBot(bot->GetGUID().GetCounter());
-    if (!managed)
-        if (Group* group = bot->GetGroup())
-            managed = sManagedBotRegistry.IsManagedGroup(group->GetGUID().GetCounter());
-
-    if (!managed)
-        return;
-
-    LastMovement& movement = followerAI->GetAiObjectContext()->GetValue<LastMovement&>("last taxi")->Get();
-    movement.taxiMaster = taxiMaster;
-    movement.taxiNodes = taxiNodes;
 }

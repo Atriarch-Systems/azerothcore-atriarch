@@ -151,7 +151,12 @@ ItemUsage ItemUsageValue::Calculate()
     // Need to add something like free bagspace or item value.
     if (proto->SellPrice > 0)
     {
-        if (proto->Quality >= ITEM_QUALITY_NORMAL && !isSoulbound && proto->Bonding != BIND_WHEN_PICKED_UP)
+        // BuyPrice > 0 is required because the auction pricing (StoreLootAction::AuctionItem) is
+        // BuyPrice-based and refuses to list BuyPrice == 0 items - tagging those ITEM_USAGE_AH
+        // would leave them permanently unlistable and retried forever. They fall through to the
+        // vendor branch instead.
+        if (proto->Quality >= ITEM_QUALITY_NORMAL && !isSoulbound && proto->Bonding != BIND_WHEN_PICKED_UP &&
+            proto->BuyPrice > 0)
             return ITEM_USAGE_AH;
         else
             return ITEM_USAGE_VENDOR;

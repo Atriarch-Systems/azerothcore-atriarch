@@ -227,4 +227,10 @@ GuildDungeon.FlightApproachSeconds = 180
 # only this checkpoint waits, briefly, and only if such a player is present and out of earshot.
 GuildDungeon.MeetingStoneWaitSeconds = 90
 
+# Time budget for Phase::Entering: how long the run waits for every member to
+# actually zone into the instance (teleport refusals: full instance, bind
+# mismatch, level gate) before aborting instead of silently spinning until the
+# global run timeout.
+GuildDungeon.EnterSeconds = 120
+
 GuildDungeon.Debug = 1

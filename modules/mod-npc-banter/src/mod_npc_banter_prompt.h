@@ -9,18 +9,20 @@
 // (the same instruction class OllamaChat.ChatPromptTemplate already uses).
 //
 // This instruction rides inside the prompt body itself rather than the
-// request's separate "system" field or a per-request NumPredict/think
-// override: NpcBanter dispatches through mod-ollama-chat's own shared
-// g_queryManager.submitQuery()/QueryOllamaAPI(), which always builds its
-// request from mod-ollama-chat's OWN OllamaChat.SystemPrompt/NumPredict/think
-// config, not NpcBanter's. See the delivering agent's final report
-// (Deviations) for the full reasoning.
+// request's separate "system" field: NpcBanter dispatches through
+// mod-ollama-chat's shared g_queryManager.submitQuery()/QueryOllamaAPI(),
+// which defaults the system/think fields from mod-ollama-chat's OWN
+// OllamaChat.SystemPrompt/think config. NpcBanter.NumPredict, however, IS
+// sent as the request's real num_predict via the OllamaQueryOptions override
+// passed at dispatch (mod_npc_banter_worldscript.cpp) - the word count woven
+// into the prompt text below is the advisory half of that same budget.
 std::string BuildNpcBanterPrompt(std::string const& archetypeKey, std::string const& backstory,
                                   std::string const& npcName, std::string const& playerName);
 
 // Post-generation safety net: trims whitespace, strips a single pair of
-// wrapping quotes, and caps length. Does NOT apply the banned-topics filter -
-// see NpcBanterMatchesBannedTopic for that.
+// wrapping quotes, caps length, and trims a clipped/mid-word-truncated reply
+// back to a sentence (or word) boundary. Does NOT apply the banned-topics
+// filter - see NpcBanterMatchesBannedTopic for that.
 std::string SanitizeNpcBanterResponse(std::string text);
 
 // True if text matches any entry in NpcBanter.BannedTopics. On a match the

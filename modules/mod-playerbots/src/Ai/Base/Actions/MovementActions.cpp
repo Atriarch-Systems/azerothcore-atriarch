@@ -2965,7 +2965,7 @@ bool MoveAwayFromPlayerWithDebuffAction::Execute(Event /*event*/)
 
 bool MoveAwayFromPlayerWithDebuffAction::isPossible() { return bot->CanFreeMove(); }
 
-bool MovementAction::TryFlightInsteadOfTeleport(WorldPosition const& dest)
+bool MovementAction::TryFlightInsteadOfTeleport(WorldPosition const& dest, WorldPosition* chosenFmPos)
 {
     if (!sPlayerbotAIConfig.realisticTravelFlightBeforeTeleport)
         return false;
@@ -2998,6 +2998,11 @@ bool MovementAction::TryFlightInsteadOfTeleport(WorldPosition const& dest)
     float distToFm = bot->GetDistance(info->pos);
     if (distToFm > sPlayerbotAIConfig.reactDistance * 10.0f)
         return false;
+
+    // Route and ground-leg range validated - this is the flightmaster the attempt commits
+    // to. Report it so the caller's one-shot latch can recognize arrival later.
+    if (chosenFmPos)
+        *chosenFmPos = info->pos;
 
     if (distToFm > INTERACTION_DISTANCE)
     {

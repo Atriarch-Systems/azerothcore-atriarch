@@ -1205,7 +1205,11 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t /*type*/, uint32
     // (candidateBots) instead of inventing a separate resolution path; each bot is only
     // actually affected internally when it currently holds real group leadership (request) or
     // matches a live pending offer for this specific player (confirmation/cancellation).
-    if (!candidateBots.empty())
+    // Bot senders are excluded entirely: bot-to-bot party banter is a feature below, and a
+    // bot's own LLM flavor text ("Let me lead the way!") must never trigger a real leadership
+    // offer -- let alone one keyed to the SENDING bot, whose next generated "sure"/"okay"
+    // could then confirm it and actually transfer leadership to a bot.
+    if (!senderIsBot && !candidateBots.empty())
     {
         std::vector<Player*> remainingCandidateBots;
         remainingCandidateBots.reserve(candidateBots.size());

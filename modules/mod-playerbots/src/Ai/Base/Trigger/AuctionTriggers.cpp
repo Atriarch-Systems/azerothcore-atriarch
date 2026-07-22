@@ -21,6 +21,12 @@ bool AutoAuctionSellTrigger::IsActive()
     if (botAI->HasActivePlayerMaster())
         return false;
 
+    // Random bots only, mirroring AutoAuctionSellAction::isUseful(): a personal (non-random) bot
+    // whose owner is merely offline also has no active master, and must not liquidate its owner's
+    // items behind their back.
+    if (!sRandomPlayerbotMgr.IsRandomBot(bot))
+        return false;
+
     if (!AI_VALUE2(uint32, "item count", "usage " + std::to_string(ITEM_USAGE_AH)))
         return false;
 

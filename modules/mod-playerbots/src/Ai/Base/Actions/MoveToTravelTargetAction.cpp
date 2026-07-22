@@ -17,6 +17,22 @@ bool MoveToTravelTargetAction::Execute(Event /*event*/)
     WorldPosition botLocation(bot);
     WorldLocation location = *target->getPosition();
 
+    // Flight-before-teleport latch, arrival half: a previous max-retry fire committed this
+    // destination to a taxi ride and recorded the chosen flightmaster. Once within interact
+    // range of it, re-invoke the taxi activation immediately so arrival actually boards
+    // instead of resuming the walk toward the travel target.
+    if (flightAttemptFmPos != WorldPosition() && WorldPosition(location) == flightAttemptDest &&
+        bot->GetMapId() == flightAttemptFmPos.GetMapId() &&
+        bot->GetDistance(flightAttemptFmPos) <= INTERACTION_DISTANCE * 2)
+    {
+        if (TryFlightInsteadOfTeleport(WorldPosition(location)))
+            return true;
+
+        // Could not board (flightmaster missing/dead or fare refusal): stop re-checking
+        // arrival and let the max-retry path below reach its cooldown backstop.
+        flightAttemptFmPos = WorldPosition();
+    }
+
     Group* group = bot->GetGroup();
     if (group && !urand(0, 1) && bot == botAI->GetGroupLeader() && !bot->IsInCombat())
     {
@@ -120,10 +136,23 @@ bool MoveToTravelTargetAction::Execute(Event /*event*/)
             // realistic-travel.md, step 4), see if a real taxi flight can close the gap
             // instead. Gated behind AiPlayerbot.RealisticTravel.FlightBeforeTeleport; returns
             // false (falls through to the existing cooldown below, unchanged) if disabled, no
-            // route exists, or the flightmaster is out of ground-leg range - this cannot loop
-            // forever, since isMaxRetry() has already fired exactly once to get here.
-            if (TryFlightInsteadOfTeleport(WorldPosition(location)))
-                return true;
+            // route exists, or the flightmaster is out of ground-leg range.
+            //
+            // One-shot latch per destination: record the chosen flightmaster so the arrival
+            // check at the top of Execute boards on reaching it, and skip the flight attempt
+            // if this destination has already spent it (e.g. the flightmaster turned out to
+            // be unreachable), so the cooldown backstop is never starved.
+            WorldPosition dest(location);
+            if (dest != flightAttemptDest)
+            {
+                WorldPosition fmPos;
+                if (TryFlightInsteadOfTeleport(dest, &fmPos))
+                {
+                    flightAttemptDest = dest;
+                    flightAttemptFmPos = fmPos;
+                    return true;
+                }
+            }
 
             target->setStatus(TRAVEL_STATUS_COOLDOWN);
         }
