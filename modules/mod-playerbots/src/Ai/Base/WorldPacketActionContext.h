@@ -21,6 +21,7 @@
 #include "InventoryChangeFailureAction.h"
 #include "LeaveGroupAction.h"
 #include "LfgActions.h"
+#include "LfgLatecomerAction.h"
 #include "LootAction.h"
 #include "LootRollAction.h"
 #include "NamedObjectContext.h"
@@ -54,6 +55,7 @@ public:
         creators["accept invitation"] = &WorldPacketActionContext::accept_invitation;
         creators["give leader in dungeon"] = &WorldPacketActionContext::give_leader_in_dungeon;
         creators["leader"] = &WorldPacketActionContext::pass_leadership_to_master;
+        creators["lfg summon latecomer"] = &WorldPacketActionContext::lfg_summon_latecomer;
         creators["tell not enough money"] = &WorldPacketActionContext::tell_not_enough_money;
         creators["tell not enough reputation"] = &WorldPacketActionContext::tell_not_enough_reputation;
         creators["tell cannot equip"] = &WorldPacketActionContext::tell_cannot_equip;
@@ -139,6 +141,7 @@ private:
     static Action* accept_invitation(PlayerbotAI* botAI) { return new AcceptInvitationAction(botAI); }
     static Action* give_leader_in_dungeon(PlayerbotAI* botAI) { return new GiveLeaderAction(botAI, "I don't know this dungeon, lead the way!"); }
     static Action* pass_leadership_to_master(PlayerbotAI* botAI) { return new PassLeadershipToMasterAction(botAI); }
+    static Action* lfg_summon_latecomer(PlayerbotAI* botAI) { return new LfgSummonLatecomerAction(botAI); }
     static Action* tell_not_enough_money(PlayerbotAI* botAI) { return new TellMasterAction(botAI, "Not enough money"); }
     static Action* tell_not_enough_reputation(PlayerbotAI* botAI) { return new TellMasterAction(botAI, "Not enough reputation"); }
     static Action* tell_cannot_equip(PlayerbotAI* botAI) { return new InventoryChangeFailureAction(botAI); }

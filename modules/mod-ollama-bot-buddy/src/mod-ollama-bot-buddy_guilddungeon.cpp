@@ -1,13 +1,19 @@
 #include "mod-ollama-bot-buddy_guilddungeon.h"
 #include "mod-ollama-bot-buddy_intent.h"
 #include "Config.h"
+#include "Creature.h"
 #include "DatabaseEnv.h"
+#include "GameObject.h"
 #include "Group.h"
 #include "GroupMgr.h"
 #include "Guild.h"
 #include "GuildMgr.h"
 #include "Log.h"
 #include "ManagedBotRegistry.h"
+// Reuses the reusable, real-core-mechanic meeting-stone summon helper built for the LFG-side
+// latecomer case (section 3a) rather than the unrelated SummonAction/UseMeetingStoneAction
+// cheat-teleport code - see docs/dungeon-leadership-and-summon.md, section 3b.
+#include "MeetingStoneSummonHelper.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
 // sObjectMgr: taxi-node lookup and path/cost resolution for flight travel.
@@ -19,6 +25,8 @@
 #include "Playerbots.h"
 #include "RandomPlayerbotMgr.h"
 #include "SharedDefines.h"
+#include "TravelMgr.h"
+#include "TravelNode.h"
 #include "World.h"
 #include <algorithm>
 #include <cstdlib>
@@ -40,6 +48,34 @@ namespace
     uint32 g_rallySeconds = 120;      // max time to wait for the group to gather
     uint32 g_travelSeconds = 600;     // max overland travel time before giving up and teleporting
     bool   g_debug = true;
+
+    // Phase::AtMeetingStone (docs/dungeon-leadership-and-summon.md, section 3b): bounded pause at
+    // the meeting-stone checkpoint, end of Phase::Traveling, for a non-cohort real player grouped
+    // with the run to be fetched before proceeding to Phase::Entering.
+    uint32 g_meetingStoneWaitSeconds = 90;
+
+    // A reasonable meeting-stone search radius around the arrival/landing point. The LFG-side
+    // latecomer case (LfgLatecomerAction.cpp) uses 40y from the bot itself at the moment it's
+    // already standing at the instance entrance. Here the anchor bot is only guaranteed to be
+    // within Phase::Traveling's own 40y "arrived" radius of d.ex/d.ey/d.ez, so a meeting stone
+    // placed near the portal could be up to ~40y further away from THIS bot than it would be from
+    // an LFG-teleported one standing right on top of it. 60y covers that slack.
+    constexpr float kMeetingStoneSearchRange = 60.0f;
+
+    // Per-run cooldown between summon attempts for the same not-yet-arrived real player, so the
+    // checkpoint doesn't spam a fresh "X wants to summon you" popup every tick - matches the
+    // design doc's "don't re-attempt more than once every 30s".
+    constexpr uint32 kMeetingStoneSummonCooldownSeconds = 30;
+
+    // Realistic travel (docs/playerbot-realistic-travel.md, step 1). Both default on; either
+    // can be flipped to 0 live to instantly revert to the pre-fix behavior if something
+    // regresses, without touching the other flag.
+    bool   g_realFlightMaster = true;      // walk to an actual flightmaster before flying, instead
+                                            // of snapping onto the taxi path from wherever the bot stands
+    bool   g_multiHopTaxi = true;          // use the module's multi-hop taxi graph instead of the
+                                            // core's single direct-path lookup
+    uint32 g_flightApproachSeconds = 180;  // extra time budget added on top of g_travelSeconds to
+                                            // cover the walk-to-flightmaster leg
 
     std::vector<GuildDungeon::Dungeon> g_catalog;
     bool g_catalogLoaded = false;
@@ -76,12 +112,27 @@ namespace
     // Strategies that make a bot wander off on its own errands. Re-asserted
     // every tick because ChangeTalentsAction / PlayerbotFactory::Randomize
     // call ResetStrategies() mid-run and silently re-add "grind".
-    char const* kSuppress = "-grind,-new rpg,-rpg,-move random,-lfg,-travel";
+    //
+    // During Phase::Rallying only, "-new rpg,-rpg" are deliberately left OUT of the
+    // suppression list (docs/playerbot-realistic-travel.md, step 3): AiFactory::
+    // AddDefaultNonCombatStrategies now wires "new rpg"/"rpg" onto managed-group members too
+    // (gated by AiPlayerbot.ManagedGroupRpgStrategies), and StartRun() calls
+    // SelectiveResetStrategies(BOT_STATE_NON_COMBAT) on each member right after registering it
+    // with ManagedBotRegistry so that wiring actually takes effect for already-spawned bots -
+    // otherwise this suppression list would silently strip it back off on the very next tick.
+    // The tradeoff is accepted as documented risk, not solved here: a managed bot may
+    // occasionally wander off toward a quest or grind spot via the new-rpg state machine's own
+    // global probability weighting while rallying, with no per-action carve-out available to
+    // prevent it. AiPlayerbot.ManagedGroupRpgStrategies = 0 removes the wiring at the source,
+    // making the narrower list below equivalent to the full one again.
+    char const* kSuppressFull     = "-grind,-new rpg,-rpg,-move random,-lfg,-travel";
+    char const* kSuppressRallying = "-grind,-move random,-lfg,-travel";
 
-    void SuppressWandering(Player* bot)
+    void SuppressWandering(Player* bot, GuildDungeon::Phase phase)
     {
         if (PlayerbotAI* ai = sPlayerbotsMgr.GetPlayerbotAI(bot))
-            ai->ChangeStrategy(kSuppress, BOT_STATE_NON_COMBAT);
+            ai->ChangeStrategy(phase == GuildDungeon::Phase::Rallying ? kSuppressRallying : kSuppressFull,
+                               BOT_STATE_NON_COMBAT);
     }
 
     Group* RunGroup()
@@ -99,6 +150,75 @@ namespace
                 if (p->IsInWorld())
                     out.push_back(p);
         return out;
+    }
+
+    // Mutable lookup into g_run.members by guid - used by the Traveling-phase flight logic to
+    // persist per-member flight sub-state (which flightmaster, which multi-hop route) across
+    // ticks. LiveMembers() above returns Player* copies with no way back to this record.
+    GuildDungeon::Member* FindMemberRecord(ObjectGuid guid)
+    {
+        for (auto& m : g_run.members)
+            if (m.guid == guid)
+                return &m;
+        return nullptr;
+    }
+
+    // --- Phase::AtMeetingStone helpers (docs/dungeon-leadership-and-summon.md, section 3b) ---
+
+    // Nearest live member standing on `mapId` to (x, y, z) - used to anchor the meeting-stone
+    // search on a bot that is actually near the landing point, since
+    // MeetingStoneSummonHelper::FindNearestRealMeetingStone scans relative to a WorldObject, not
+    // raw coordinates. Returns nullptr if no live member is on that map yet.
+    Player* NearestMemberTo(std::vector<Player*> const& members, uint32 mapId, float x, float y, float z)
+    {
+        Player* nearest = nullptr;
+        float nearestDist = 0.f;
+        for (Player* p : members)
+        {
+            if (p->GetMapId() != mapId)
+                continue;
+            float dist = p->GetDistance(x, y, z);
+            if (!nearest || dist < nearestDist)
+            {
+                nearest = p;
+                nearestDist = dist;
+            }
+        }
+        return nearest;
+    }
+
+    // Finds a real (non-playerbot) member of `group` who is not within earshot - the engine's
+    // actual CONFIG_LISTEN_RANGE_SAY (sWorld->getFloatConfig, WorldConfig.cpp:423 "ListenRange.Say",
+    // default 40y), never a hardcoded literal - of `landmark` (the meeting stone). Mirrors
+    // LfgLatecomerValue::Calculate() (mod-playerbots' Ai/Base/Value/LfgValues.cpp), adapted from
+    // LFG's "different map/instance" post-teleport check to this checkpoint's own "out of Say
+    // range of the meeting stone" condition.
+    //
+    // IMPORTANT, as of this writing: BuildCohort()/StartRun() above only ever populate this run's
+    // Group with guild-roster PLAYERBOTS (BuildCohort filters every candidate on
+    // sPlayerbotsMgr.GetPlayerbotAI(p) && sRandomPlayerbotMgr.IsRandomBot(p)), and nothing else in
+    // this file ever adds anyone else to that Group afterward. So in the current system this will
+    // always return nullptr in practice, making Phase::AtMeetingStone a safe no-op every run - see
+    // this feature's final report for the full explanation of what would need to be true for a
+    // real player to ever be detected here.
+    Player* FindUngroupedRealPlayer(Group* group, WorldObject* landmark)
+    {
+        if (!group || !landmark)
+            return nullptr;
+
+        float listenRange = sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_SAY);
+        for (Group::MemberSlot const& slot : group->GetMemberSlots())
+        {
+            Player* member = ObjectAccessor::FindPlayer(slot.guid);
+            if (!member || !member->IsInWorld())
+                continue; // fully offline members can't be meeting-stone summoned anyway
+            if (sPlayerbotsMgr.GetPlayerbotAI(member))
+                continue; // playerbot, not a real player
+
+            if (member->GetMapId() != landmark->GetMapId() || member->GetDistance(landmark) > listenRange)
+                return member;
+        }
+        return nullptr;
     }
 
     void RegisterManaged(bool on)
@@ -129,13 +249,14 @@ namespace GuildDungeon
     {
         switch (p)
         {
-            case Phase::Idle:      return "idle";
-            case Phase::Rallying:  return "rallying";
-            case Phase::Traveling: return "traveling";
-            case Phase::Entering:  return "entering";
-            case Phase::Running:   return "running";
-            case Phase::Returning: return "returning";
-            case Phase::Finished:  return "finished";
+            case Phase::Idle:           return "idle";
+            case Phase::Rallying:       return "rallying";
+            case Phase::Traveling:      return "traveling";
+            case Phase::AtMeetingStone: return "meetingstone";
+            case Phase::Entering:       return "entering";
+            case Phase::Running:        return "running";
+            case Phase::Returning:      return "returning";
+            case Phase::Finished:       return "finished";
         }
         return "?";
     }
@@ -344,48 +465,188 @@ namespace GuildDungeon
 
     // --- travel -----------------------------------------------------------
 
-    // Put one member on a flight path toward the dungeon. Returns true if a flight started.
-    //
-    // This is a SCRIPTED taxi call (npc == nullptr), which is what makes it usable at all
-    // here: the npc-less branch of ActivateTaxiPathTo skips the flight-master proximity and
-    // "have you discovered this node" checks a real player faces. Orchestrated bots have no
-    // master to walk them to a flight master, and most have never discovered the node, so
-    // the normal path would refuse every time.
-    //
-    // spellid is left at 1 deliberately. With spellid == 0 the core's CONFIG_INSTANT_TAXI
-    // shortcut collapses the whole journey into a teleport, and the journey is the point.
-    bool TryStartFlight(Player* p, Dungeon const& d)
+    // Result of one tick's worth of flight-leg progress for a single member.
+    enum class FlightLegResult : uint8
     {
-        if (!p || !p->IsAlive() || p->IsInFlight() || p->IsInCombat())
-            return false;
+        None,     // no flight in progress; caller should fall back to the ground walk
+        Walking,  // en route to a flightmaster on foot; leave the member alone this tick
+        Flying    // taxi just activated (or already in the air)
+    };
+
+    // Sum the fare across every consecutive hop in a resolved node list. ActivateTaxiPathTo
+    // only ever debits the first hop's cost up front (Player.cpp), but it refuses the whole
+    // itinerary outright unless the player can afford the TOTAL - so the shortfall has to be
+    // topped up against this sum, not just the first hop's cost.
+    uint32 TotalTaxiFare(std::vector<uint32> const& nodes)
+    {
+        uint32 total = 0;
+        for (size_t i = 1; i < nodes.size(); ++i)
+        {
+            uint32 path = 0, cost = 0;
+            sObjectMgr->GetTaxiPath(nodes[i - 1], nodes[i], path, cost);
+            total += cost;
+        }
+        return total;
+    }
+
+    // Resolve the node list for a src -> dst flight, preferring the module's own multi-hop
+    // taxi graph (which finds routes needing a transfer) and falling back to the core's
+    // single-hop lookup - either because GuildDungeon.MultiHopTaxi is off, or because the
+    // graph itself has no cached route for this pair. Returns an empty vector if no route
+    // exists by either method.
+    std::vector<uint32> ResolveTaxiNodes(uint32 src, uint32 dst)
+    {
+        if (!src || !dst || src == dst)
+            return {};
+
+        if (g_multiHopTaxi)
+        {
+            std::vector<uint32> nodes = sTravelNodeMap.FindTaxiPath(src, dst);
+            if (!nodes.empty())
+                return nodes;
+        }
+
+        uint32 path = 0, cost = 0;
+        sObjectMgr->GetTaxiPath(src, dst, path, cost);
+        if (!path)
+            return {};
+        return { src, dst };
+    }
+
+    // Pre-fix behavior, kept as the GuildDungeon.RealFlightMaster=0 kill switch: snaps the bot
+    // onto the taxi path via the scripted/no-NPC call from wherever it stands, instead of
+    // walking to a flightmaster first. Still honors GuildDungeon.MultiHopTaxi independently -
+    // that flag closes a separate shortcut (single-hop-only routing) and reverting 1a should
+    // not silently revert 1b too.
+    //
+    // spellid is left at 1 deliberately: with spellid == 0 the core's CONFIG_INSTANT_TAXI
+    // shortcut collapses the whole journey into a teleport, and the journey is the point.
+    FlightLegResult TryStartFlightLegacy(Player* p, Dungeon const& d)
+    {
+        if (!p->IsAlive() || p->IsInCombat())
+            return FlightLegResult::None;
         // ActivateTaxiPathTo refuses these outright; checking first keeps the log quiet.
         if (p->HasUnitState(UNIT_STATE_STUNNED) || p->HasUnitState(UNIT_STATE_ROOT))
-            return false;
+            return FlightLegResult::None;
 
         uint32 team = uint32(p->GetTeamId());
         uint32 src = sObjectMgr->GetNearestTaxiNode(p->GetPositionX(), p->GetPositionY(),
                                                     p->GetPositionZ(), p->GetMapId(), team);
         uint32 dst = sObjectMgr->GetNearestTaxiNode(d.ex, d.ey, d.ez, d.entranceMap, team);
-        if (!src || !dst || src == dst)
-            return false;
 
-        uint32 path = 0, cost = 0;
-        sObjectMgr->GetTaxiPath(src, dst, path, cost);
-        if (!path)
-            return false; // no direct route; caller falls back to walking
+        std::vector<uint32> nodes = ResolveTaxiNodes(src, dst);
+        if (nodes.empty())
+            return FlightLegResult::None; // no route; caller falls back to walking
 
+        uint32 cost = TotalTaxiFare(nodes);
         // The fare is charged even on a scripted call, and a level-15 bot is usually broke —
         // without this the flight silently fails and the group walks into the same death
         // that stalled the first run. Cover only the shortfall.
         if (p->GetMoney() < cost)
             p->ModifyMoney(int32(cost - p->GetMoney()));
 
-        std::vector<uint32> nodes = { src, dst };
         if (!p->ActivateTaxiPathTo(nodes, nullptr, 1))
-            return false;
+            return FlightLegResult::None;
 
-        GdLogf("TRAVEL '{}' flying taxi node {} -> {} (cost {})", p->GetName(), src, dst, cost);
-        return true;
+        GdLogf("TRAVEL '{}' flying scripted taxi {} node(s) {} -> {} (cost {})",
+               p->GetName(), uint32(nodes.size()), src, dst, cost);
+        return FlightLegResult::Flying;
+    }
+
+    // Advance one member's Phase::Traveling flight leg by one tick.
+    //
+    // Step 1 fix: the old behavior (TryStartFlightLegacy above) called
+    // ActivateTaxiPathTo(nodes, nullptr, 1) from wherever the bot happened to be standing -
+    // the npc-less "scripted call" branch skips the flightmaster-proximity check entirely, so
+    // the bot was silently teleported onto the flight path rather than walking there. This
+    // walks the member to an actual flightmaster NPC first (mirrors NewRpgTravelFlightAction,
+    // Ai/World/Rpg/Action/NewRpgAction.cpp:459-501) and only uses the real "taximaster" branch
+    // (npc != nullptr) once the member is actually standing at it. The chosen flightmaster and
+    // resolved route are cached on the Member record so a walk in progress isn't re-targeted
+    // or re-resolved every tick.
+    FlightLegResult AdvanceFlightLeg(Player* p, GuildDungeon::Member& m, Dungeon const& d)
+    {
+        if (!g_realFlightMaster)
+            return TryStartFlightLegacy(p, d);
+
+        if (!p->IsAlive() || p->IsInCombat())
+            return FlightLegResult::None;
+        if (p->HasUnitState(UNIT_STATE_STUNNED) || p->HasUnitState(UNIT_STATE_ROOT))
+            return FlightLegResult::None;
+
+        if (m.taxiNodes.empty())
+        {
+            TravelMgr::FlightMasterInfo const* info = sTravelMgr.GetNearestFlightMasterInfo(p);
+            if (!info)
+                return FlightLegResult::None; // no cached flightmaster on this map at all
+
+            uint32 team = uint32(p->GetTeamId());
+            uint32 dst = sObjectMgr->GetNearestTaxiNode(d.ex, d.ey, d.ez, d.entranceMap, team);
+            if (!dst || info->taxiNodeId == dst)
+                return FlightLegResult::None; // already essentially at the destination node
+
+            std::vector<uint32> nodes = ResolveTaxiNodes(info->taxiNodeId, dst);
+            if (nodes.empty())
+                return FlightLegResult::None; // no route, even via the multi-hop graph
+
+            m.flightMasterEntry = info->templateEntry;
+            m.flightMasterMapId = info->pos.GetMapId();
+            m.flightMasterX = info->pos.GetPositionX();
+            m.flightMasterY = info->pos.GetPositionY();
+            m.flightMasterZ = info->pos.GetPositionZ();
+            m.taxiNodes = std::move(nodes);
+        }
+
+        // The map changed under us (e.g. a GM teleport) - the cached flightmaster is stale.
+        // Drop it and let the caller fall back to the ground walk toward the entrance instead
+        // of chasing a target on a map the member is no longer on.
+        if (p->GetMapId() != m.flightMasterMapId)
+        {
+            m.taxiNodes.clear();
+            return FlightLegResult::None;
+        }
+
+        if (p->GetDistance(m.flightMasterX, m.flightMasterY, m.flightMasterZ) > INTERACTION_DISTANCE)
+        {
+            p->GetMotionMaster()->MovePoint(0, m.flightMasterX, m.flightMasterY, m.flightMasterZ,
+                                             FORCED_MOVEMENT_NONE, 0.f, 0.f, true, false);
+            return FlightLegResult::Walking;
+        }
+
+        Creature* flightMaster = p->FindNearestCreature(m.flightMasterEntry, INTERACTION_DISTANCE * 3);
+        if (!flightMaster || !flightMaster->IsAlive())
+        {
+            // NPC not there (despawned, or the cached position doesn't line up) - give up this
+            // leg rather than stalling the member here forever; the caller's ground walk to
+            // the entrance (and, in the worst case, the Phase::Entering timeout teleport) takes
+            // over instead of introducing a second infinite wait.
+            m.taxiNodes.clear();
+            return FlightLegResult::None;
+        }
+
+        if (PlayerbotAI* ai = sPlayerbotsMgr.GetPlayerbotAI(p))
+            ai->RemoveShapeshift();
+        if (p->IsMounted())
+            p->Dismount();
+        p->GetSession()->SendLearnNewTaxiNode(flightMaster);
+
+        uint32 cost = TotalTaxiFare(m.taxiNodes);
+        if (p->GetMoney() < cost)
+            p->ModifyMoney(int32(cost - p->GetMoney()));
+
+        std::vector<uint32> nodes = m.taxiNodes;
+        if (!p->ActivateTaxiPathTo(nodes, flightMaster, 0))
+        {
+            GdLogf("TRAVEL '{}' ActivateTaxiPathTo at flightmaster {} failed - falling back to ground",
+                   p->GetName(), m.flightMasterEntry);
+            m.taxiNodes.clear();
+            return FlightLegResult::None;
+        }
+
+        GdLogf("TRAVEL '{}' flying {} node(s) from flightmaster {} (cost {})",
+               p->GetName(), uint32(nodes.size()), m.flightMasterEntry, cost);
+        m.taxiNodes.clear();
+        return FlightLegResult::Flying;
     }
 
     // --- run lifecycle ----------------------------------------------------
@@ -493,7 +754,17 @@ namespace GuildDungeon
 
         RegisterManaged(true);
         for (Player* p : LiveMembers())
-            SuppressWandering(p);
+        {
+            // Managed-group RPG strategies (AiPlayerbot.ManagedGroupRpgStrategies) only take
+            // effect through AiFactory::AddDefaultNonCombatStrategies, which runs at
+            // construction/ResetStrategies/SelectiveResetStrategies time - never on group-join.
+            // Without this, a bot that was already spawned before this run started would keep
+            // running whatever non-combat strategy set it had before, oblivious to the
+            // ManagedBotRegistry registration that just happened above.
+            if (PlayerbotAI* ai = sPlayerbotsMgr.GetPlayerbotAI(p))
+                ai->SelectiveResetStrategies(BOT_STATE_NON_COMBAT);
+            SuppressWandering(p, g_run.phase);
+        }
 
         GdLogf("FORM guild='{}' ({}) dungeon='{}' members=[{}]", g_run.guildName, guildId, g_run.dungeon.name, roster.str());
         SetPhase(g_run.dungeon.rallyMap || g_run.dungeon.rx != 0.f ? Phase::Rallying : Phase::Entering);
@@ -546,7 +817,7 @@ namespace GuildDungeon
         // Re-assert the wandering suppression every tick: ChangeTalentsAction
         // and PlayerbotFactory::Randomize re-add "grind" behind our back.
         for (Player* p : members)
-            SuppressWandering(p);
+            SuppressWandering(p, g_run.phase);
 
         // Membership loss (bot logged out / left) - a run with too few members
         // must not silently "complete".
@@ -603,7 +874,7 @@ namespace GuildDungeon
                 // making travel work at all, not a separate nicety: on a long overland trip
                 // the lowest member of a level-banded group WILL occasionally die, and the
                 // run should survive that.
-                uint32 arrived = 0, flying = 0, revived = 0;
+                uint32 arrived = 0, flying = 0, walkingToFm = 0, revived = 0;
                 for (Player* p : members)
                 {
                     if (!p->IsAlive())
@@ -626,12 +897,26 @@ namespace GuildDungeon
                         continue;
                     }
 
-                    // Only bother with a flight for genuinely long hops; short ones walk.
-                    if (p->GetMapId() != d.entranceMap || p->GetDistance(d.ex, d.ey, d.ez) > 300.0f)
+                    Member* m = FindMemberRecord(p->GetGUID());
+
+                    // Only bother with a flight for genuinely long hops; short ones walk. A
+                    // member already committed to a flightmaster (non-empty taxiNodes) keeps
+                    // going regardless of current distance to the entrance, so a walk already
+                    // in progress isn't abandoned partway just because it happened to bring
+                    // the member within 300y of the destination coordinates.
+                    bool wantsFlight = m && (!m->taxiNodes.empty() || p->GetMapId() != d.entranceMap ||
+                                             p->GetDistance(d.ex, d.ey, d.ez) > 300.0f);
+                    if (wantsFlight)
                     {
-                        if (TryStartFlight(p, d))
+                        FlightLegResult result = AdvanceFlightLeg(p, *m, d);
+                        if (result == FlightLegResult::Flying)
                         {
                             ++flying;
+                            continue;
+                        }
+                        if (result == FlightLegResult::Walking)
+                        {
+                            ++walkingToFm;
                             continue;
                         }
                     }
@@ -643,16 +928,67 @@ namespace GuildDungeon
                 if (revived)
                     GdLogf("TRAVEL revived {} member(s) who died en route", revived);
 
+                // RealFlightMaster adds a real walk-to-flightmaster leg on top of the flight
+                // itself, so it gets its own time budget on top of the base TravelSeconds
+                // rather than eating into it - see GuildDungeon.FlightApproachSeconds.
+                uint32 travelBudget = g_travelSeconds + (g_realFlightMaster ? g_flightApproachSeconds : 0);
                 if (arrived >= members.size())
                 {
                     GdLog("TRAVEL complete");
-                    SetPhase(Phase::Entering);
+                    SetPhase(Phase::AtMeetingStone);
                 }
-                else if ((now - g_run.phaseAt) > time_t(g_travelSeconds))
+                else if ((now - g_run.phaseAt) > time_t(travelBudget))
                 {
-                    GdLogf("TRAVEL timeout after {}s ({} arrived, {} still in the air) - teleporting the rest to the portal",
-                           g_travelSeconds, arrived, flying);
+                    GdLogf("TRAVEL timeout after {}s ({} arrived, {} flying, {} walking to a flightmaster) - "
+                           "teleporting the rest to the portal",
+                           travelBudget, arrived, flying, walkingToFm);
+                    SetPhase(Phase::AtMeetingStone);
+                }
+                break;
+            }
+
+            case Phase::AtMeetingStone:
+            {
+                // Real-player fetch checkpoint (docs/dungeon-leadership-and-summon.md, section
+                // 3b) - the ONLY place this run ever pauses for a real player. Phase::Rallying
+                // and Phase::Traveling above never wait on anyone but guild-cohort bots, and that
+                // is unchanged by this phase.
+                Group* group = RunGroup();
+                Player* anchor = NearestMemberTo(members, d.entranceMap, d.ex, d.ey, d.ez);
+
+                GameObject* meetingStone = anchor
+                    ? MeetingStoneSummonHelper::FindNearestRealMeetingStone(anchor, kMeetingStoneSearchRange)
+                    : nullptr;
+                Player* latecomer = meetingStone ? FindUngroupedRealPlayer(group, meetingStone) : nullptr;
+
+                bool timedOut = (now - g_run.phaseAt) > time_t(g_meetingStoneWaitSeconds);
+                if (!latecomer || timedOut)
+                {
+                    if (latecomer && timedOut)
+                        GdLogf("MEETINGSTONE timeout after {}s waiting for real player '{}' - proceeding to Entering",
+                               g_meetingStoneWaitSeconds, latecomer->GetName());
                     SetPhase(Phase::Entering);
+                    break;
+                }
+
+                // A real, non-cohort player is grouped with this run and out of earshot of the
+                // stone - summon them in via the leader (or the nearest bot, if the leader isn't
+                // itself near the stone), at most once per kMeetingStoneSummonCooldownSeconds so
+                // the summon popup isn't re-sent every tick.
+                if (now - g_run.lastMeetingStoneSummonAttempt >= time_t(kMeetingStoneSummonCooldownSeconds))
+                {
+                    Player* leader = ObjectAccessor::FindPlayer(group->GetLeaderGUID());
+                    Player* summoner = (leader && leader->IsInWorld() && leader->IsAlive() &&
+                                        leader->GetMapId() == meetingStone->GetMapId() &&
+                                        leader->GetDistance(meetingStone) <= kMeetingStoneSearchRange)
+                                           ? leader : anchor;
+
+                    g_run.lastMeetingStoneSummonAttempt = now;
+                    if (MeetingStoneSummonHelper::SummonPlayerViaMeetingStone(summoner, latecomer, meetingStone))
+                        GdLogf("MEETINGSTONE '{}' summoned late real player '{}' via meeting stone",
+                               summoner->GetName(), latecomer->GetName());
+                    else
+                        GdLogf("MEETINGSTONE summon attempt failed for real player '{}'", latecomer->GetName());
                 }
                 break;
             }
@@ -782,9 +1118,20 @@ void GuildDungeonWorldScript::OnStartup()
     g_travelSeconds     = sConfigMgr->GetOption<uint32>("GuildDungeon.TravelSeconds", 600);
     g_debug             = sConfigMgr->GetOption<bool>("GuildDungeon.Debug", true);
 
+    g_realFlightMaster      = sConfigMgr->GetOption<bool>("GuildDungeon.RealFlightMaster", true);
+    g_multiHopTaxi          = sConfigMgr->GetOption<bool>("GuildDungeon.MultiHopTaxi", true);
+    g_flightApproachSeconds = sConfigMgr->GetOption<uint32>("GuildDungeon.FlightApproachSeconds", 180);
+
+    g_meetingStoneWaitSeconds = sConfigMgr->GetOption<uint32>("GuildDungeon.MeetingStoneWaitSeconds", 90);
+
     LOG_INFO("module.guilddungeon",
         "[GuildDungeon] Enable={}, TickSeconds={}, MinLevel={}, LevelBand={}, MinMembers={}, MaxRunMinutes={}",
         g_enable ? "true" : "false", g_tickSeconds, g_minLevel, g_levelBand, g_minMembers, g_maxRunMinutes);
+    LOG_INFO("module.guilddungeon",
+        "[GuildDungeon] RealFlightMaster={}, MultiHopTaxi={}, FlightApproachSeconds={}",
+        g_realFlightMaster ? "true" : "false", g_multiHopTaxi ? "true" : "false", g_flightApproachSeconds);
+    LOG_INFO("module.guilddungeon",
+        "[GuildDungeon] MeetingStoneWaitSeconds={}", g_meetingStoneWaitSeconds);
 
     GuildDungeon::ReloadCatalog();
 }

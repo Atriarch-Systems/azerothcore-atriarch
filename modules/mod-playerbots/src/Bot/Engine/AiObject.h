@@ -7,6 +7,9 @@
 #ifndef PLAYERBOTS_AIOBJECT_H
 #define PLAYERBOTS_AIOBJECT_H
 
+#include <string>
+#include <vector>
+
 #include "Common.h"
 #include "PlayerbotAIAware.h"
 
@@ -19,6 +22,15 @@ class AiObject : public PlayerbotAIAware
 {
 public:
     AiObject(PlayerbotAI* botAI);
+
+    // Defined in AiObject.cpp (via Playerbots.h -> AiObjectContext.h), not inline here --
+    // AiObjectContext is only forward-declared in this header (it depends on Value.h, which
+    // depends on this header, so the two can't both be fully visible in the same TU without a
+    // cycle). CalculatedValue<T>::Get()/RefGet() are templates that get re-instantiated in every
+    // consuming translation unit, so they must never dereference `context` directly in a header --
+    // route through this ordinary (non-template) function instead, whose *definition* sees the
+    // complete type regardless of what any particular consumer happens to include first.
+    std::vector<std::string>* GetPerformanceStack();
 
 protected:
     Player* bot;

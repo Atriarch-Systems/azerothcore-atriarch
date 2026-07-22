@@ -215,6 +215,7 @@ public:
         creators["mana save level"] = &ValueContext::mana_save_level;
         creators["combat"] = &ValueContext::combat;
         creators["lfg proposal"] = &ValueContext::lfg_proposal;
+        creators["lfg latecomer"] = &ValueContext::lfg_latecomer;
         creators["bag space"] = &ValueContext::bag_space;
         creators["durability"] = &ValueContext::durability;
         creators["max repair cost"] = &ValueContext::max_repair_cost;
@@ -482,6 +483,7 @@ private:
     static UntypedValue* threat(PlayerbotAI* botAI) { return new ThreatValue(botAI); }
     static UntypedValue* combat(PlayerbotAI* botAI) { return new IsInCombatValue(botAI); }
     static UntypedValue* lfg_proposal(PlayerbotAI* botAI) { return new LfgProposalValue(botAI); }
+    static UntypedValue* lfg_latecomer(PlayerbotAI* botAI) { return new LfgLatecomerValue(botAI); }
     static UntypedValue* bag_space(PlayerbotAI* botAI) { return new BagSpaceValue(botAI); }
     static UntypedValue* durability(PlayerbotAI* botAI) { return new DurabilityValue(botAI); }
     static UntypedValue* max_repair_cost(PlayerbotAI* botAI) { return new MaxGearRepairCostValue(botAI); }

@@ -46,6 +46,16 @@ public:
 
     bool Execute(Event event) override;
     static bool IsLootAllowed(uint32 itemid, PlayerbotAI* botAI);
+
+    // Lists a single ITEM_USAGE_AH-tagged item stack (by entry) on the auction house through a
+    // nearby auctioneer NPC. Returns false (no-op, no side effects) if the bot doesn't have the
+    // item, there's no auctioneer in range, or the bot can't cover the deposit. Static + takes
+    // botAI explicitly so callers outside this class (SellAction.cpp, the autonomous
+    // AutoAuctionSellAction) can invoke it, matching the IsLootAllowed() convention above.
+    static bool AuctionItem(uint32 itemId, PlayerbotAI* botAI);
+
+private:
+    static uint32 RoundPrice(double price);
 };
 
 class ReleaseLootAction : public InventoryAction

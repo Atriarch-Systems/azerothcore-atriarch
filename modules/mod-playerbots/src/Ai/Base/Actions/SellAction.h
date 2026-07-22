@@ -23,4 +23,18 @@ public:
     void Sell(Item* item);
 };
 
+// Autonomous counterpart to "s vendor"/"s *": periodically lists a handful of ITEM_USAGE_AH-tagged
+// items on the auction house without a chat command, for bots that have no real player master.
+// Paired with AutoAuctionSellTrigger (Ai/Base/Trigger/AuctionTriggers.h); wired into
+// NonCombatStrategy so it's checked for every bot, gated off for master-controlled bots by
+// isUseful() and off entirely unless AiPlayerbot.AutoAuctionSell is enabled.
+class AutoAuctionSellAction : public InventoryAction
+{
+public:
+    AutoAuctionSellAction(PlayerbotAI* botAI) : InventoryAction(botAI, "auto auction sell") {}
+
+    bool Execute(Event event) override;
+    bool isUseful() override;
+};
+
 #endif

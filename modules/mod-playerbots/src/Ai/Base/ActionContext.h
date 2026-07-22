@@ -58,6 +58,7 @@
 #include "RpgSubActions.h"
 #include "RtiAction.h"
 #include "SayAction.h"
+#include "SellAction.h"
 #include "StayActions.h"
 #include "SuggestWhatToDoAction.h"
 #include "TravelAction.h"
@@ -125,6 +126,7 @@ public:
         creators["dps aoe"] = &ActionContext::dps_aoe;
         creators["attack rti target"] = &ActionContext::attack_rti_target;
         creators["loot"] = &ActionContext::loot;
+        creators["auto auction sell"] = &ActionContext::auto_auction_sell;
         creators["add loot"] = &ActionContext::add_loot;
         creators["add gathering loot"] = &ActionContext::add_gathering_loot;
         creators["add all loot"] = &ActionContext::add_all_loot;
@@ -354,6 +356,7 @@ private:
     static Action* add_loot(PlayerbotAI* botAI) { return new AddLootAction(botAI); }
     static Action* add_all_loot(PlayerbotAI* botAI) { return new AddAllLootAction(botAI); }
     static Action* loot(PlayerbotAI* botAI) { return new LootAction(botAI); }
+    static Action* auto_auction_sell(PlayerbotAI* botAI) { return new AutoAuctionSellAction(botAI); }
     static Action* release_loot(PlayerbotAI* botAI) { return new ReleaseLootAction(botAI); }
     static Action* dps_assist(PlayerbotAI* botAI) { return new DpsAssistAction(botAI); }
     static Action* dps_aoe(PlayerbotAI* botAI) { return new DpsAoeAction(botAI); }

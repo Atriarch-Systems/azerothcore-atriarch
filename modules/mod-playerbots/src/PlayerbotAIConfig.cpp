@@ -459,6 +459,20 @@ bool PlayerbotAIConfig::Initialize()
     botTaxiGapMs = sConfigMgr->GetOption<uint32>("AiPlayerbot.BotTaxiGapMs", 200);
     botTaxiGapJitterMs = sConfigMgr->GetOption<uint32>("AiPlayerbot.BotTaxiGapJitterMs", 100);
 
+    managedGroupRpgStrategies = sConfigMgr->GetOption<bool>("AiPlayerbot.ManagedGroupRpgStrategies", true);
+    realisticTravelFlightBeforeTeleport =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.RealisticTravel.FlightBeforeTeleport", true);
+    randomTeleportPreferFlight = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomTeleportPreferFlight", false);
+    randomTeleportFlightMaxHops = sConfigMgr->GetOption<uint32>("AiPlayerbot.RandomTeleportFlightMaxHops", 2);
+
+    lfgAutoLeaderHandoff = sConfigMgr->GetOption<bool>("AiPlayerbot.Lfg.AutoLeaderHandoff", false);
+    lfgLatecomerGraceSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Lfg.LatecomerGraceSeconds", 60);
+    lfgLeaderOfferTimeoutSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Lfg.LeaderOfferTimeoutSeconds", 60);
+
+    // See the declaration comment in PlayerbotAIConfig.h - off by default pending a build-verified
+    // feature-branch test (docs/session-improvements-2026-07-21.md, item 6).
+    autoAuctionSell = sConfigMgr->GetOption<bool>("AiPlayerbot.AutoAuctionSell", false);
+
     LOG_INFO("server.loading", "Loading TalentSpecs...");
 
     for (uint32 cls = 1; cls < MAX_CLASSES; ++cls)

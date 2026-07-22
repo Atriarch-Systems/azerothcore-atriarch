@@ -115,7 +115,18 @@ bool MoveToTravelTargetAction::Execute(Event /*event*/)
         target->incRetry(true);
 
         if (target->isMaxRetry(true))
+        {
+            // Before giving this destination up as unreachable on foot (docs/playerbot-
+            // realistic-travel.md, step 4), see if a real taxi flight can close the gap
+            // instead. Gated behind AiPlayerbot.RealisticTravel.FlightBeforeTeleport; returns
+            // false (falls through to the existing cooldown below, unchanged) if disabled, no
+            // route exists, or the flightmaster is out of ground-leg range - this cannot loop
+            // forever, since isMaxRetry() has already fired exactly once to get here.
+            if (TryFlightInsteadOfTeleport(WorldPosition(location)))
+                return true;
+
             target->setStatus(TRAVEL_STATUS_COOLDOWN);
+        }
     }
     else
         target->setRetry(true);

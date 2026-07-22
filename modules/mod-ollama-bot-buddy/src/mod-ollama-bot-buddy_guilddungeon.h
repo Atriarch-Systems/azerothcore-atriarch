@@ -27,11 +27,14 @@ namespace GuildDungeon
     enum class Phase : uint8
     {
         Idle = 0,
-        Rallying,   // gathering at the rally town
-        Traveling,  // moving overland to the dungeon entrance
-        Entering,   // leader in first, then members (shared instance id)
-        Running,    // intent layer drives the route
-        Returning,  // hearthstone / teleport home
+        Rallying,       // gathering at the rally town
+        Traveling,      // moving overland to the dungeon entrance
+        AtMeetingStone, // checkpoint: fetch a non-cohort real player via the real meeting-stone
+                        // summon mechanic before entering (docs/dungeon-leadership-and-summon.md,
+                        // section 3b) - bounded by GuildDungeon.MeetingStoneWaitSeconds
+        Entering,       // leader in first, then members (shared instance id)
+        Running,        // intent layer drives the route
+        Returning,      // hearthstone / teleport home
         Finished
     };
 
@@ -63,6 +66,16 @@ namespace GuildDungeon
         uint8 level = 0;
         std::string role;
         std::string savedStrategies; // for exact restore on run end
+
+        // --- Phase::Traveling flight sub-state ---
+        // Persists which flightmaster (if any) this member is currently walking to / has
+        // queued a multi-hop taxi route from, across ticks. Empty taxiNodes means "not
+        // currently committed to a flight leg" - the tick handler resolves a fresh target
+        // when it sees an empty list. See GuildDungeon.RealFlightMaster/MultiHopTaxi.
+        uint32 flightMasterEntry = 0;   // creature template entry of the chosen flightmaster
+        uint32 flightMasterMapId = 0;
+        float  flightMasterX = 0, flightMasterY = 0, flightMasterZ = 0;
+        std::vector<uint32> taxiNodes;  // multi-hop node list to activate on arrival
     };
 
     struct Run
@@ -79,6 +92,13 @@ namespace GuildDungeon
         time_t startedAt = 0;
         time_t phaseAt = 0;
         uint32 bossesDown = 0;
+
+        // --- Phase::AtMeetingStone bookkeeping ---
+        // Per-run cooldown so a non-cohort real player who is out of range doesn't get a fresh
+        // "X wants to summon you" popup every tick - mirrors the LFG-side latecomer action's
+        // implicit cooldown (Ai/Base/Trigger/LfgTriggers.cpp's 30s checkInterval). 0 means "no
+        // summon attempted yet this run".
+        time_t lastMeetingStoneSummonAttempt = 0;
     };
 
     // Catalog access

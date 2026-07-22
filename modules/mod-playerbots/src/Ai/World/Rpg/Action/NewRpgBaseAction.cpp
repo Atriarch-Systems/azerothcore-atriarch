@@ -96,6 +96,16 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
         // its RPG objective instead of oscillating indefinitely.
         botAI->rpgInfo.stuckTs = getMSTime();
         botAI->rpgInfo.stuckAttempts = 0;
+
+        // Before resorting to a bare teleport, see if a real taxi flight can close the gap
+        // instead (docs/playerbot-realistic-travel.md, step 4). Gated behind
+        // AiPlayerbot.RealisticTravel.FlightBeforeTeleport; returns false (falls through to the
+        // teleport below, unchanged) if disabled, no route exists, or the flightmaster is out
+        // of ground-leg range - this never adds a new indefinite retry, it just spends the one
+        // stuck-timeout slot that would have teleported on a flight attempt instead.
+        if (TryFlightInsteadOfTeleport(dest))
+            return true;
+
         const AreaTableEntry* entry = sAreaTableStore.LookupEntry(bot->GetZoneId());
         std::string zone_name = PlayerbotAI::GetLocalizedAreaName(entry);
         LOG_DEBUG(

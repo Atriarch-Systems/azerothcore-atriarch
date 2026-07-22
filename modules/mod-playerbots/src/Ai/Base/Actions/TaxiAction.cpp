@@ -7,6 +7,7 @@
 
 #include "Event.h"
 #include "LastMovementValue.h"
+#include "ManagedBotRegistry.h"
 #include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
 #include "PlayerbotAIConfig.h"
@@ -59,8 +60,22 @@ bool TaxiAction::Execute(Event event)
                 }
         }
 
-        // Only for follower bots
-        if (botAI->HasRealPlayerMaster())
+        // Only for follower bots - including managed-group virtual leaders. A managed group
+        // (e.g. mod-ollama-bot-buddy's guild dungeon runs) has a bot leader, not a real player,
+        // so HasRealPlayerMaster() never fires for its followers; RememberTaxiAction::
+        // RememberManagedTaxi() is what populates "last taxi" for them in that case (there's no
+        // CMSG_ACTIVATETAXI packet to intercept), and this OR is what lets the staggered
+        // takeoff scheduler below still pick it up.
+        bool followerLed = botAI->HasRealPlayerMaster();
+        if (!followerLed)
+        {
+            followerLed = sManagedBotRegistry.IsManagedBot(bot->GetGUID().GetCounter());
+            if (!followerLed)
+                if (Group* group = bot->GetGroup())
+                    followerLed = sManagedBotRegistry.IsManagedGroup(group->GetGUID().GetCounter());
+        }
+
+        if (followerLed)
         {
             uint32 index = botAI->GetGroupSlotIndex(bot);
             uint32 delay = sPlayerbotAIConfig.botTaxiDelayMin +

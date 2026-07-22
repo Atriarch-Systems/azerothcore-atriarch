@@ -1594,6 +1594,73 @@ void RandomPlayerbotMgr::Revive(Player* player)
     RandomTeleportGrindForLevel(player);
 }
 
+namespace
+{
+    // docs/playerbot-realistic-travel.md, step 5: replace an instant relocation with a same-
+    // continent taxi flight toward `loc` when a short enough one exists, so a random-teleported
+    // bot appears to actually travel there instead of blinking. Uses the same npc-less
+    // "scripted taxi" call as a pre-fix GuildDungeon flight (see mod-ollama-bot-buddy's
+    // TryStartFlightLegacy) - RandomTeleport's whole mechanic is already an out-of-character
+    // relocation, so this only needs to make it look better in transit, not turn it into a
+    // fully grounded walk-to-a-flightmaster journey (that version lives in
+    // MovementAction::TryFlightInsteadOfTeleport, used by the RPG/travel-target actions
+    // instead). Returns true only once ActivateTaxiPathTo has actually committed the bot to the
+    // flight; every other outcome (cross-continent, no/too-long route, wrong faction/no
+    // gold/mid-combat/stunned/rooted, or ActivateTaxiPathTo itself refusing) returns false so
+    // RandomTeleport falls straight through to its existing raw teleport - the bot is never
+    // left stuck mid-decision.
+    bool TryFlightRelocation(Player* bot, PlayerbotAI* botAI, WorldLocation const& loc)
+    {
+        if (!botAI)
+            return false;
+        if (!bot->IsAlive() || bot->IsInCombat())
+            return false;
+        if (bot->HasUnitState(UNIT_STATE_STUNNED) || bot->HasUnitState(UNIT_STATE_ROOT))
+            return false;
+        if (bot->IsInFlight())
+            return false;
+
+        // The taxi graph is per-continent; getting to another one needs a boat, not a flight.
+        if (loc.GetMapId() != bot->GetMapId())
+            return false;
+
+        TravelMgr::FlightMasterInfo const* info = sTravelMgr.GetNearestFlightMasterInfo(bot);
+        if (!info)
+            return false;
+
+        uint32 team = uint32(bot->GetTeamId());
+        uint32 dstNode = sObjectMgr->GetNearestTaxiNode(loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(),
+                                                        loc.GetMapId(), team);
+        if (!dstNode || info->taxiNodeId == dstNode)
+            return false;
+
+        std::vector<uint32> nodes = sTravelNodeMap.FindTaxiPath(info->taxiNodeId, dstNode);
+        if (nodes.empty())
+            return false;
+
+        uint32 hops = uint32(nodes.size()) - 1;
+        if (hops > sPlayerbotAIConfig.randomTeleportFlightMaxHops)
+            return false; // too indirect a route to be worth it - fall back to the plain teleport
+
+        uint32 cost = 0;
+        for (size_t i = 1; i < nodes.size(); ++i)
+        {
+            uint32 path = 0, hopCost = 0;
+            sObjectMgr->GetTaxiPath(nodes[i - 1], nodes[i], path, hopCost);
+            cost += hopCost;
+        }
+        if (bot->GetMoney() < cost)
+            bot->ModifyMoney(int32(cost - bot->GetMoney()));
+
+        // spellid == 1 (not 0): with 0 the core's CONFIG_INSTANT_TAXI shortcut collapses the
+        // whole flight back into a teleport, defeating the entire point of taking this path.
+        if (!bot->ActivateTaxiPathTo(nodes, nullptr, 1))
+            return false; // fare/faction/state refusal - let the caller's raw teleport fire instead
+
+        return true;
+    }
+}
+
 void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>& locs, bool hearth)
 {
     // ignore when alrdy teleported or not in the world yet.
@@ -1709,6 +1776,21 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>&
         if (hearth)
         {
             bot->SetHomebind(loc, zone->ID);
+        }
+
+        if (sPlayerbotAIConfig.randomTeleportPreferFlight)
+        {
+            // A flying bot is visible for the whole multi-minute journey, not just the instant
+            // of relocation like the raw teleport below - widen the real-player-avoidance
+            // radius accordingly before committing to this path (3x the raw-teleport radius).
+            // This only gates the flight attempt; the raw-teleport fallback a few lines down
+            // still uses its own original 150.0f check regardless of why it ends up there.
+            if (!botAI->HasPlayerNearby(450.0f) && TryFlightRelocation(bot, botAI, loc))
+            {
+                if (pmo)
+                    pmo->finish();
+                return;
+            }
         }
 
         // Prevent blink to be detected by visible real players

@@ -14,3 +14,5 @@ AiObject::AiObject(PlayerbotAI* botAI)
 }
 
 Player* AiObject::GetMaster() { return botAI->GetMaster(); }
+
+std::vector<std::string>* AiObject::GetPerformanceStack() { return context ? &context->performanceStack : nullptr; }

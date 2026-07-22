@@ -7,6 +7,7 @@
 #include "PassLeadershipToMasterAction.h"
 
 #include "Event.h"
+#include "PlayerbotAIConfig.h"
 #include "PlayerbotOperations.h"
 #include "PlayerbotWorldThreadProcessor.h"
 
@@ -40,5 +41,10 @@ bool PassLeadershipToMasterAction::isUseful()
 
 bool GiveLeaderAction::isUseful()
 {
-    return botAI->HasActivePlayerMaster() && bot->GetGroup() && bot->GetGroup()->IsLeader(bot->GetGUID());
+    // AiPlayerbot.Lfg.AutoLeaderHandoff (default off): without it, a bot that ends up leading an
+    // LFG-formed group (e.g. by the dungeon finder's formation coin flip) simply keeps leading --
+    // no automatic hand-off to a real player master just because they share the instance. See
+    // docs/dungeon-leadership-and-summon.md, section 1.
+    return sPlayerbotAIConfig.lfgAutoLeaderHandoff && botAI->HasActivePlayerMaster() && bot->GetGroup() &&
+           bot->GetGroup()->IsLeader(bot->GetGUID());
 }

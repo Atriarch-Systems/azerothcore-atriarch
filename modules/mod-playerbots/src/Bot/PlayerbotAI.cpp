@@ -441,7 +441,15 @@ void PlayerbotAI::UpdateAIGroupMaster()
     if (!master || (masterBotAI && !masterBotAI->IsRealPlayer()))
     {
         Player* newMaster = FindNewMaster();
-        if (newMaster)
+
+        // Only (re)apply master/strategy state when it is actually changing. Before the all-bot
+        // instance tank fallback in FindNewMaster(), this outer guard re-triggering every tick was
+        // harmless because FindNewMaster() kept returning nullptr for a group with no real player,
+        // so this block never ran. Now FindNewMaster() can consistently return the same bot tank
+        // every tick for such a group, and without this check the block below would re-run
+        // unconditionally on every tick (repeated ResetStrategies() + re-sent "Hello!" text) even
+        // though nothing changed.
+        if (newMaster && newMaster != master)
         {
             master = newMaster;
             botAI->SetMaster(newMaster);
@@ -4461,6 +4469,34 @@ Player* PlayerbotAI::FindNewMaster()
             return member;
         }
     }
+
+    // No real player exists anywhere in this group. This happens when enough idle random bots
+    // queue the same LFG dungeon type as a real player that matchmaking spins up multiple 5-mans -
+    // the real player lands in at most one of them, and every other resulting group is 100% bots.
+    // Without a fallback here, none of those all-bot groups gets a +follow master (see
+    // UpdateAIGroupMaster()), so nobody in the group has a movement/navigation reference for
+    // out-of-combat corridor travel between pulls. Scope this strictly to dungeon/raid instance
+    // maps - not Map::Instanceable(), which is also true for battlegrounds/arenas - so open-world,
+    // battleground, and arena groups are entirely unaffected.
+    Map* map = bot->GetMap();
+    if (map && map->IsDungeon())
+    {
+        for (GroupReference* gref = group->GetFirstMember(); gref; gref = gref->next())
+        {
+            Player* member = gref->GetSource();
+            if (!member || member == bot || !member->IsInWorld() || !member->IsInSameRaidWith(bot))
+                continue;
+
+            if (IsTank(member))
+            {
+                LOG_DEBUG("playerbots",
+                    "FindNewMaster: all-bot instance group for {}, using tank {} as navigation master",
+                    bot->GetName(), member->GetName());
+                return member;
+            }
+        }
+    }
+
     return nullptr;
 }
 

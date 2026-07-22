@@ -207,4 +207,24 @@ GuildDungeon.LootGraceSeconds = 20
 GuildDungeon.RallySeconds = 120
 GuildDungeon.TravelSeconds = 600
 
+# Realistic travel (docs/playerbot-realistic-travel.md step 1). Both default on;
+# either is a kill switch back to the pre-fix behavior if something regresses.
+# RealFlightMaster: walk to an actual flightmaster before flying, instead of
+# snapping onto the taxi path from wherever the member stands.
+# MultiHopTaxi: use the module's own multi-hop taxi graph instead of the core's
+# single direct-path lookup, so routes needing a transfer still fly.
+GuildDungeon.RealFlightMaster = 1
+GuildDungeon.MultiHopTaxi = 1
+
+# Extra time budget added on top of TravelSeconds above to cover the
+# walk-to-flightmaster leg RealFlightMaster adds (only applied while it's on).
+GuildDungeon.FlightApproachSeconds = 180
+
+# Meeting-stone checkpoint (docs/dungeon-leadership-and-summon.md, section 3b): once bots arrive
+# at the entrance (end of Phase::Traveling), the run pauses here for at most this many seconds to
+# fetch a non-cohort real player grouped with the run (via the real meeting-stone summon
+# mechanic) before proceeding to Phase::Entering. Bots' own arrival is never gated on this -
+# only this checkpoint waits, briefly, and only if such a player is present and out of earshot.
+GuildDungeon.MeetingStoneWaitSeconds = 90
+
 GuildDungeon.Debug = 1

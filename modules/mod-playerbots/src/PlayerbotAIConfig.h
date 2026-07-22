@@ -451,6 +451,34 @@ public:
     uint32 botTaxiGapMs;
     uint32 botTaxiGapJitterMs;
 
+    // Realistic travel & lifestyle (docs/playerbot-realistic-travel.md, steps 3-5). Each is an
+    // independent kill switch: flipping one back to its old default fully reverts just that
+    // piece of the feature.
+    bool   managedGroupRpgStrategies;           // step 3: also wire new-rpg/rpg/move random onto managed-group followers
+    bool   realisticTravelFlightBeforeTeleport; // step 4: try a real taxi flight before MoveFarTo/travel-target give up and teleport
+    bool   randomTeleportPreferFlight;          // step 5: prefer a taxi flight over an instant random-teleport (OFF by default)
+    uint32 randomTeleportFlightMaxHops;         // step 5: give up on the flight (fall back to teleport) past this many taxi legs
+
+    // LFG leadership defaults + meeting-stone latecomer summon (docs/dungeon-leadership-and-summon.md,
+    // sections 1 and 3a).
+    bool   lfgAutoLeaderHandoff;      // section 1: master switch for auto-handing LFG leadership to the
+                                      // real player master (OFF by default -- a bot that ends up leading
+                                      // an LFG group just keeps leading unless this is flipped on)
+    uint32 lfgLatecomerGraceSeconds;  // section 3a: grace period after the bot enters a dungeon instance
+                                      // before it attempts a meeting-stone summon for a real group member
+                                      // who hasn't zoned in yet
+    uint32 lfgLeaderOfferTimeoutSeconds; // section 2: window for a player to confirm a "give me lead" offer
+                                         // (mod-ollama-chat_leaderoffer.cpp) before it's cancelled
+
+    // Autonomous auction-house selling for unattended bots (docs/session-improvements-2026-07-21.md,
+    // item 6): gates AutoAuctionSellTrigger/AutoAuctionSellAction, which periodically list
+    // ITEM_USAGE_AH-tagged loot through a nearby auctioneer NPC instead of that only being reachable
+    // via the "s vendor"/"s *" chat command. OFF by default - this is new gold/item-moving C++ that
+    // hasn't been through a build in this environment (no compiler available here), and it changes
+    // bot economic behavior server-wide; flip on after a local Windows feature-branch build
+    // validates it, per this project's "CI is the only deployer" convention.
+    bool autoAuctionSell;
+
     std::string const GetTimestampStr();
     bool hasLog(std::string const fileName)
     {

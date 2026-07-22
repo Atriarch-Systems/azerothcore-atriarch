@@ -14,6 +14,7 @@
 #include "HunterAiObjectContext.h"
 #include "Item.h"
 #include "MageAiObjectContext.h"
+#include "ManagedBotRegistry.h"
 #include "PaladinAiObjectContext.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
@@ -600,7 +601,16 @@ void AiFactory::AddDefaultNonCombatStrategies(Player* player, PlayerbotAI* const
         if (sPlayerbotAIConfig.randomBotJoinLfg)
             nonCombatEngine->addStrategy("lfg", false);
 
-        if (!player->GetGroup() || player->GetGroup()->GetLeaderGUID() == player->GetGUID())
+        // Managed groups (e.g. mod-ollama-bot-buddy's guild dungeon runs) are led by a bot, not
+        // a real player, so the ungrouped-or-leader check alone never fires for their
+        // followers - they'd otherwise fall into the `else` branch below and never get
+        // "new rpg"/"rpg"/"move random" wired on at all. Gated behind
+        // AiPlayerbot.ManagedGroupRpgStrategies so this exception is one config flip away from
+        // fully reverting (docs/playerbot-realistic-travel.md, step 3).
+        bool managedGroupMember = sPlayerbotAIConfig.managedGroupRpgStrategies && player->GetGroup() &&
+            sManagedBotRegistry.IsManagedGroup(player->GetGroup()->GetGUID().GetCounter());
+
+        if (!player->GetGroup() || player->GetGroup()->GetLeaderGUID() == player->GetGUID() || managedGroupMember)
         {
             // let 25% of random not grouped (or grp leader) bots help other players
             // if (!urand(0, 3))

@@ -1,0 +1,134 @@
+[worldserver]
+
+########################################
+# mod-npc-banter configuration
+########################################
+#
+# Opt-in LLM-flavored ambient barks for ordinary world NPCs (guards, vendors,
+# innkeepers). See docs/npc-banter.md for the full design. Eligible NPCs are
+# hand-curated per spawn in the mod_npc_banter_config WORLD DB table (see
+# data/sql/world/base/2026_07_21_npc_banter.sql) - this file only controls
+# tuning/behavior, not which NPCs are opted in.
+#
+# NpcBanter dispatches through mod-ollama-chat's shared QueryManager, so
+# mod-ollama-chat must also be enabled and configured (OllamaChat.Url/Model/
+# etc. in mod_ollama_chat.conf) for banter to actually reach an LLM. This
+# module's own MaxConcurrentQueries below is a SUB-cap inside that shared
+# ceiling, never a second independent one.
+
+# --------------------------------------------
+# CORE TOGGLE
+# --------------------------------------------
+
+# NpcBanter.Enable
+#     Description: Master switch for the whole feature.
+#     Default:     0 (false)
+NpcBanter.Enable = 0
+
+# --------------------------------------------
+# PROXIMITY TRIGGER
+# --------------------------------------------
+
+# NpcBanter.TickSeconds
+#     Description: How often the WorldScript::OnUpdate accumulator scans the
+#                  (small, hand-curated) allowlist of registered NPCs.
+#                  Faster than mod-ollama-chat's own 30s ambient tick is fine
+#                  here precisely because each check is an O(1) grid query
+#                  per NPC, not an O(bots) scan.
+#     Default:     15
+NpcBanter.TickSeconds = 15
+
+# NpcBanter.BanterRange
+#     Description: Yards. Radius used by SelectNearestPlayer per registered NPC.
+#     Default:     20.0
+NpcBanter.BanterRange = 20.0
+
+# NpcBanter.MinCooldown / NpcBanter.MaxCooldown
+#     Description: Seconds. Jittered per-NPC re-banter interval. This is the
+#                  ONLY long-term re-trigger gate - once it expires, the same
+#                  returning player re-triggers a banter attempt exactly like
+#                  a new one would (see docs/npc-banter.md section 3 for why).
+#                  Deliberately much longer than a bot's 45-180s chatter
+#                  interval - a guard standing at one gate all day has far
+#                  less to react to than a mobile bot.
+#     Default:     120 / 300
+NpcBanter.MinCooldown = 120
+NpcBanter.MaxCooldown = 300
+
+# --------------------------------------------
+# CONCURRENCY / RATE-LIMITING / CACHING
+# --------------------------------------------
+
+# NpcBanter.MaxConcurrentQueries
+#     Description: Soft sub-cap enforced by this module BEFORE ever calling
+#                  QueryManager::submitQuery(). Claims at most this many of
+#                  the shared OllamaChat.MaxConcurrentQueries slots - never
+#                  raises that ceiling, only ever borrows from it.
+#     Default:     1
+NpcBanter.MaxConcurrentQueries = 1
+
+# NpcBanter.CacheReuseChance
+#     Description: Percent chance (0-100) to replay a recently-generated line
+#                  verbatim instead of calling the LLM again. Checked before
+#                  the sub-cap above, so a cache hit never touches it at all.
+#     Default:     50
+NpcBanter.CacheReuseChance = 50
+
+# NpcBanter.NumPredict
+#     Description: Advisory token/word budget folded into the prompt's own
+#                  length instruction. Tighter than OllamaChat.NumPredict=60 -
+#                  ambient barks are shorter than conversational replies.
+#                  NOTE: this does NOT set the request's actual num_predict
+#                  option - see the "Deviations" note in the delivering
+#                  agent's report for why (NpcBanter shares mod-ollama-chat's
+#                  QueryOllamaAPI/QueryManager call path verbatim, which
+#                  always builds its request options from mod-ollama-chat's
+#                  OWN OllamaChat.NumPredict).
+#     Default:     25
+NpcBanter.NumPredict = 25
+
+# NpcBanter.BannedTopics
+#     Description: Comma-separated list of substrings checked (case-
+#                  insensitively) against the LLM's generated text AFTER
+#                  generation, before it is ever spoken. On a match the line
+#                  is discarded and a canned line is used instead - never
+#                  regenerated (a retry is a second GPU call). Leave blank to
+#                  disable the filter entirely.
+#     Example:     NpcBanter.BannedTopics = politics,religion,real-world news
+#     Default:     (curated list below)
+NpcBanter.BannedTopics = politics,religion,real-world news,current events,sexual content
+
+# --------------------------------------------
+# CANNED-LINE FALLBACK
+# --------------------------------------------
+# Pipe-separated ('|') list of lines used whenever the LLM path is skipped
+# (sub-cap full) or fails (empty/malformed/banned-topic match). Never left
+# empty in practice - an archetype with no dedicated list falls back to
+# NpcBanter.CannedLines.Default, and one with neither simply stays silent.
+
+# NpcBanter.CannedLines.GUARD
+#     Default: (see below)
+NpcBanter.CannedLines.GUARD = Move along.|Keep your business quick, traveler.|Watch yourself around here.
+
+# NpcBanter.CannedLines.VENDOR
+#     Default: (see below)
+NpcBanter.CannedLines.VENDOR = Take a look at my wares, friend.|Prices are fair today.|Let me know if you need anything.
+
+# NpcBanter.CannedLines.INNKEEPER
+#     Default: (see below)
+NpcBanter.CannedLines.INNKEEPER = Welcome, traveler. Rest a while.|Long road behind you, eh?|The fire's warm if you'd like to sit.
+
+# NpcBanter.CannedLines.Default
+#     Description: Fallback used by any archetype key with no dedicated list above.
+#     Default:     (see below)
+NpcBanter.CannedLines.Default = Well met, traveler.
+
+# --------------------------------------------
+# DELIVERY
+# --------------------------------------------
+
+# NpcBanter.WhisperOnly
+#     Description: If 1, always Whisper the triggering player instead of
+#                  Say-ing to everyone nearby.
+#     Default:     0 (false)
+NpcBanter.WhisperOnly = 0

@@ -32,6 +32,7 @@
 #include "mod-ollama-chat-utilities.h"
 #include "mod-ollama-chat_sentiment.h"
 #include "mod-ollama-chat_rag.h"
+#include "mod-ollama-chat_leaderoffer.h"
 #include <iomanip>
 #include "SpellMgr.h"
 #include "SpellInfo.h"
@@ -1193,10 +1194,38 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t /*type*/, uint32
     
     if (g_DebugEnabled && notEligibleCount > 0)
     {
-        LOG_INFO("server.loading", "[Ollama Chat] {} bots not eligible for {} (distance/guild/party checks failed)", 
+        LOG_INFO("server.loading", "[Ollama Chat] {} bots not eligible for {} (distance/guild/party checks failed)",
                 notEligibleCount, ChatChannelSourceLocalStr[sourceLocal]);
     }
-    
+
+    // Chat-based group-leadership handoff (docs/dungeon-leadership-and-summon.md, section 2).
+    // Deterministic, no LLM involved -- must run before the reply-chance roll and prompt/LLM
+    // dispatch below so a "give me lead" request or its yes/no confirmation never gets treated
+    // as ordinary chat flavor text. Reuses the eligibility filtering already done above
+    // (candidateBots) instead of inventing a separate resolution path; each bot is only
+    // actually affected internally when it currently holds real group leadership (request) or
+    // matches a live pending offer for this specific player (confirmation/cancellation).
+    if (!candidateBots.empty())
+    {
+        std::vector<Player*> remainingCandidateBots;
+        remainingCandidateBots.reserve(candidateBots.size());
+        for (Player* bot : candidateBots)
+        {
+            PlayerbotAI* candidateBotAI = bot ? PlayerbotsMgr::instance().GetPlayerbotAI(bot) : nullptr;
+            if (candidateBotAI && TryHandleLeaderOfferChat(player, candidateBotAI, trimmedMsg))
+            {
+                if (g_DebugEnabled)
+                {
+                    LOG_INFO("server.loading", "[Ollama Chat] Leader-offer chat handled for bot {} from player {}; skipping normal chat handling for this bot.",
+                            bot->GetName(), player->GetName());
+                }
+                continue;
+            }
+            remainingCandidateBots.push_back(bot);
+        }
+        candidateBots.swap(remainingCandidateBots);
+    }
+
     // Determine reply chance based on channel type
     uint32_t chance;
     if (sourceLocal == SRC_SAY_LOCAL || sourceLocal == SRC_YELL_LOCAL)

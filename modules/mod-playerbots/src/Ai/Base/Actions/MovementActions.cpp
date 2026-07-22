@@ -12,6 +12,7 @@
 #include <string>
 
 #include "Corpse.h"
+#include "Creature.h"
 #include "Event.h"
 #include "FleeManager.h"
 #include "G3D/Vector3.h"
@@ -24,6 +25,7 @@
 #include "MovementGenerator.h"
 #include "ObjectDefines.h"
 #include "ObjectGuid.h"
+#include "ObjectMgr.h"
 #include "PathGenerator.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
@@ -37,6 +39,7 @@
 #include "SpellInfo.h"
 #include "Stances.h"
 #include "Timer.h"
+#include "TravelMgr.h"
 #include "Unit.h"
 #include "Vehicle.h"
 #include "WaypointMovementGenerator.h"
@@ -2961,3 +2964,70 @@ bool MoveAwayFromPlayerWithDebuffAction::Execute(Event /*event*/)
 }
 
 bool MoveAwayFromPlayerWithDebuffAction::isPossible() { return bot->CanFreeMove(); }
+
+bool MovementAction::TryFlightInsteadOfTeleport(WorldPosition const& dest)
+{
+    if (!sPlayerbotAIConfig.realisticTravelFlightBeforeTeleport)
+        return false;
+
+    if (!bot->IsAlive() || bot->IsInCombat())
+        return false;
+    if (bot->HasUnitState(UNIT_STATE_STUNNED) || bot->HasUnitState(UNIT_STATE_ROOT))
+        return false;
+    if (bot->IsInFlight())
+        return true; // already airborne - let it land instead of teleporting mid-flight
+
+    TravelMgr::FlightMasterInfo const* info = sTravelMgr.GetNearestFlightMasterInfo(bot);
+    if (!info)
+        return false;
+
+    uint32 team = uint32(bot->GetTeamId());
+    uint32 dstNode = sObjectMgr->GetNearestTaxiNode(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(),
+                                                    dest.GetMapId(), team);
+    if (!dstNode || info->taxiNodeId == dstNode)
+        return false;
+
+    std::vector<uint32> nodes = sTravelNodeMap.FindTaxiPath(info->taxiNodeId, dstNode);
+    if (nodes.empty())
+        return false; // no cached multi-hop route between these two nodes
+
+    // Bounded ground leg: a flightmaster clear across the zone is no better a lead-in than the
+    // original destination was, so only worth it within a distance the bot would happily walk
+    // anyway (reusing the same order-of-magnitude budget MoveFarTo's own callers work with,
+    // rather than inventing a second, parallel notion of "close enough").
+    float distToFm = bot->GetDistance(info->pos);
+    if (distToFm > sPlayerbotAIConfig.reactDistance * 10.0f)
+        return false;
+
+    if (distToFm > INTERACTION_DISTANCE)
+    {
+        // Walk there with the action's own ordinary movement primitive - not a second, parallel
+        // movement system, just MoveFarTo's real backstop (MoveTo) aimed at the flightmaster.
+        return MoveTo(info->pos.GetMapId(), info->pos.GetPositionX(), info->pos.GetPositionY(),
+                      info->pos.GetPositionZ(), false, false, false, true);
+    }
+
+    Creature* flightMaster = bot->FindNearestCreature(info->templateEntry, INTERACTION_DISTANCE * 3);
+    if (!flightMaster || !flightMaster->IsAlive())
+        return false; // NPC not actually there - fall through to the caller's teleport backstop
+
+    uint32 cost = 0;
+    for (size_t i = 1; i < nodes.size(); ++i)
+    {
+        uint32 path = 0, hopCost = 0;
+        sObjectMgr->GetTaxiPath(nodes[i - 1], nodes[i], path, hopCost);
+        cost += hopCost;
+    }
+    if (bot->GetMoney() < cost)
+        bot->ModifyMoney(int32(cost - bot->GetMoney()));
+
+    botAI->RemoveShapeshift();
+    if (bot->IsMounted())
+        bot->Dismount();
+    bot->GetSession()->SendLearnNewTaxiNode(flightMaster);
+
+    if (!bot->ActivateTaxiPathTo(nodes, flightMaster, 0))
+        return false; // fare/faction/state refusal - let the caller's teleport backstop fire
+
+    return true;
+}

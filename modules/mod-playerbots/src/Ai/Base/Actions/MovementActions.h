@@ -67,6 +67,18 @@ protected:
     bool FleePosition(Position pos, float radius, uint32 minInterval = 1000);
     bool CheckLastFlee(float curAngle, std::list<FleeInfo>& infoList);
 
+    // Shared by NewRpgBaseAction::MoveFarTo and MoveToTravelTargetAction::Execute
+    // (docs/playerbot-realistic-travel.md, step 4): before either gives up on a ground route -
+    // a straight bot->TeleportTo(dest), or, for the travel-target action, marking the
+    // destination as an unreachable retry-cooldown - see whether a real taxi flight can close
+    // the gap instead of skipping straight to that backstop. Returns true if a flight leg is
+    // now handled this tick (walking toward the flightmaster, or airborne); callers should treat
+    // that as "handled, do not fall through to your own backstop this tick". Returns false if no
+    // route exists, the flightmaster is out of ground-leg range, or
+    // AiPlayerbot.RealisticTravel.FlightBeforeTeleport is off - callers fall through to their
+    // existing backstop unchanged.
+    bool TryFlightInsteadOfTeleport(WorldPosition const& dest);
+
 protected:
     struct CheckAngle
     {

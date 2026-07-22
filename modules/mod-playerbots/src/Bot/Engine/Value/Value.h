@@ -74,11 +74,11 @@ public:
     {
         if (checkInterval < 2)
         {
-            // PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_VALUE, this->getName(),
-            // this->context ? &this->context->performanceStack : nullptr);
+            PerfMonitorOperation* pmo = sPerfMonitor.start(
+                PERF_MON_VALUE, this->getName(), this->GetPerformanceStack());
             value = Calculate();
-            // if (pmo)
-            //     pmo->finish();
+            if (pmo)
+                pmo->finish();
         }
         else
         {
@@ -86,11 +86,11 @@ public:
             if (!lastCheckTime || now - lastCheckTime >= checkInterval)
             {
                 lastCheckTime = now;
-                // PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_VALUE, this->getName(),
-                // this->context ? &this->context->performanceStack : nullptr);
+                PerfMonitorOperation* pmo = sPerfMonitor.start(
+                    PERF_MON_VALUE, this->getName(), this->GetPerformanceStack());
                 value = Calculate();
-                // if (pmo)
-                //     pmo->finish();
+                if (pmo)
+                    pmo->finish();
             }
         }
         return value;
@@ -107,11 +107,11 @@ public:
     {
         if (checkInterval < 2)
         {
-            // PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_VALUE, this->getName(),
-            // this->context ? &this->context->performanceStack : nullptr);
+            PerfMonitorOperation* pmo = sPerfMonitor.start(
+                PERF_MON_VALUE, this->getName(), this->GetPerformanceStack());
             value = Calculate();
-            // if (pmo)
-            //     pmo->finish();
+            if (pmo)
+                pmo->finish();
         }
         else
         {
@@ -119,11 +119,11 @@ public:
             if (!lastCheckTime || now - lastCheckTime >= checkInterval)
             {
                 lastCheckTime = now;
-                // PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_VALUE, this->getName(),
-                // this->context ? &this->context->performanceStack : nullptr);
+                PerfMonitorOperation* pmo = sPerfMonitor.start(
+                    PERF_MON_VALUE, this->getName(), this->GetPerformanceStack());
                 value = Calculate();
-                // if (pmo)
-                //     pmo->finish();
+                if (pmo)
+                    pmo->finish();
             }
         }
         return value;
@@ -157,7 +157,7 @@ public:
             this->lastCheckTime = now;
 
             PerfMonitorOperation* pmo = sPerfMonitor.start(
-                PERF_MON_VALUE, this->getName(), this->context ? &this->context->performanceStack : nullptr);
+                PERF_MON_VALUE, this->getName(), this->GetPerformanceStack());
             this->value = this->Calculate();
             if (pmo)
                 pmo->finish();

@@ -10,6 +10,11 @@ void NonCombatStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
 {
     triggers.push_back(new TriggerNode("random", { NextAction("clean quest log", 1.0f) }));
     triggers.push_back(new TriggerNode("timer", { NextAction("check mount state", 1.0f) }));
+    // Autonomous AH selling for unattended bots (docs/session-improvements-2026-07-21.md, item 6).
+    // Wired here so it's checked for every bot like the two triggers above; AutoAuctionSellTrigger's
+    // own 5-minute checkInterval keeps that cheap, and AutoAuctionSellAction::isUseful() gates out
+    // bots with a real, currently-active player master.
+    triggers.push_back(new TriggerNode("auto auction sell", { NextAction("auto auction sell", 1.0f) }));
 }
 
 void CollisionStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)

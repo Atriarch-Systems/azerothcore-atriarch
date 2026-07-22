@@ -5,8 +5,10 @@
 
 #include "LootAction.h"
 
+#include "AuctionHouseMgr.h"
 #include "ChatHelper.h"
 #include "Event.h"
+#include "GameTime.h"
 #include "GuildMgr.h"
 #include "GuildTaskMgr.h"
 #include "ItemUsageValue.h"
@@ -254,7 +256,6 @@ bool OpenLootAction::CanOpenLock(uint32 skillId, uint32 reqSkillValue)
     return skillValue >= reqSkillValue || !reqSkillValue;
 }
 
-/*
 uint32 StoreLootAction::RoundPrice(double price)
 {
     if (price < 100)
@@ -275,80 +276,128 @@ uint32 StoreLootAction::RoundPrice(double price)
     return (uint32)(price / 10000.0) * 10000;
 }
 
-bool StoreLootAction::AuctionItem(uint32 itemId)
+// This was previously dead code (wrapped in a block comment) written against an older
+// AuctionHouseMgr/AuctionEntry API that has since drifted - see docs/session-improvements-2026-07-21.md
+// item 6. Rewritten against the current core API (cross-checked against the real player packet
+// path in AuctionHouseHandler.cpp::HandleAuctionSellItem):
+//   - AuctionEntry's fields are now item_guid/item_template/expire_time (ObjectGuid owner/bidder),
+//     not the old itemGuidLow/itemTemplate/expireTime (uint32 owner/bidder) layout.
+//   - AuctionHouseMgr::GetAuctionHouseEntry(uint32) no longer exists; the faction->AuctionHouseEntry
+//     lookup is AuctionHouseMgr::GetAuctionHouseEntryFromFactionTemplate(), and it already folds in
+//     CONFIG_ALLOW_TWO_SIDE_INTERACTION_AUCTION (returns the Neutral DBC row when that's set), so no
+//     extra branching is needed here.
+//   - AuctionHouseObject* AuctionHouseMgr::GetAuctionsMap() takes the faction TEMPLATE id (uint32),
+//     not an AuctionHouseEntry*; it independently folds in the same two-sided-config check.
+//   - sAhBotConfig (mod-ah-bot's config) doesn't apply to this module at all - that's a separate,
+//     disabled, vendored module (see doc item 6.4) - replaced with a small self-contained chance.
+//   - Yes, this needs a live auctioneer NPC in range: both GetAuctionHouseEntryFromFactionTemplate()
+//     and GetAuctionDeposit() key off the auctioneer's own faction template/DBC entry, exactly like
+//     the real "talk to an Auctioneer" packet handler does - there's no "list remotely" API. Callers
+//     (SellVendorItemsVisitor, AutoAuctionSellAction) are expected to already be near one; this
+//     function is also safe to call speculatively since it just returns false if none is in range.
+bool StoreLootAction::AuctionItem(uint32 itemId, PlayerbotAI* botAI)
 {
-    ItemTemplate const* proto = sItemStorage.LookupEntry<ItemTemplate>(itemId);
+    Player* bot = botAI->GetBot();
+
+    ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
     if (!proto)
         return false;
 
-    if (!proto || proto->Bonding == BIND_WHEN_PICKED_UP || proto->Bonding == BIND_QUEST_ITEM)
+    if (proto->Bonding == BIND_WHEN_PICKED_UP || proto->Bonding == BIND_QUEST_ITEM)
         return false;
 
-    Item* oldItem = bot->GetItemByEntry(itemId);
-    if (!oldItem)
-        return false;
-
-    AuctionHouseEntry const* ahEntry = AuctionHouseMgr::GetAuctionHouseEntry(unit->getFaction());
-    if (!ahEntry)
-        return false;
-
-    AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(ahEntry);
-
-    uint32 price = oldItem->GetCount() * proto->BuyPrice * sRandomPlayerbotMgr.GetBuyMultiplier(bot);
-
-uint32 stackCount = urand(1, proto->GetMaxStackSize());
-    if (!price || !stackCount)
-        return false;
-
-    if (!stackCount)
-        stackCount = 1;
-
-    if (urand(0, 100) <= sAhBotConfig.underPriceProbability * 100)
-        price = price * 100 / urand(100, 200);
-
-    uint32 bidPrice = RoundPrice(stackCount * price);
-    uint32 buyoutPrice = RoundPrice(stackCount * urand(price, 4 * price / 3));
-
-    Item* item = Item::CreateItem(proto->ItemId, stackCount);
+    Item* item = bot->GetItemByEntry(itemId);
     if (!item)
         return false;
 
-    uint32 auction_time = uint32(urand(8, 24) * HOUR * sWorld->getConfig(CONFIG_FLOAT_RATE_AUCTION_TIME));
+    // Mirrors the sanity checks the real HandleAuctionSellItem packet handler runs before it lets
+    // a player list an item - a conjured/timed/non-empty-bag/untradeable item would just get
+    // rejected there too.
+    if (!item->CanBeTraded() || item->IsNotEmptyBag() || item->GetTemplate()->HasFlag(ITEM_FLAG_CONJURED) ||
+        item->GetUInt32Value(ITEM_FIELD_DURATION))
+        return false;
 
-    AuctionEntry* auctionEntry = new AuctionEntry;
+    GuidVector npcs = botAI->GetAiObjectContext()->GetValue<GuidVector>("nearest npcs")->Get();
+    Creature* auctioneer = nullptr;
+    for (ObjectGuid const guid : npcs)
+    {
+        if (Creature* creature = bot->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_AUCTIONEER))
+        {
+            auctioneer = creature;
+            break;
+        }
+    }
+
+    if (!auctioneer)
+        return false;
+
+    AuctionHouseEntry const* ahEntry =
+        AuctionHouseMgr::GetAuctionHouseEntryFromFactionTemplate(auctioneer->GetFaction());
+    if (!ahEntry)
+        return false;
+
+    AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(auctioneer->GetFaction());
+    if (!auctionHouse)
+        return false;
+
+    uint32 stackCount = item->GetCount();
+
+    double basePrice = double(stackCount) * double(proto->BuyPrice) * sRandomPlayerbotMgr.GetBuyMultiplier(bot);
+    if (basePrice <= 0.0)
+        return false;
+
+    // Occasional below-vendor-price listing so bot-posted auctions don't all read identically.
+    // (The old code read this ratio from mod-ah-bot's config, which doesn't apply to this module -
+    // see the comment above - so it's just a fixed 1-in-4 chance here instead.)
+    if (!urand(0, 3))
+        basePrice = basePrice * 100.0 / urand(100, 200);
+
+    uint32 bidPrice = RoundPrice(basePrice);
+    if (!bidPrice)
+        return false;
+
+    uint32 buyoutPrice = RoundPrice(double(urand(bidPrice, 4 * bidPrice / 3)));
+
+    uint32 auctionTime = uint32(MIN_AUCTION_TIME * sWorld->getRate(RATE_AUCTION_TIME));
+
+    uint32 deposit = AuctionHouseMgr::GetAuctionDeposit(ahEntry, auctionTime, item, stackCount);
+    if (!bot->HasEnoughMoney(deposit))
+        return false;
+
+    bot->ModifyMoney(-int32(deposit));
+
+    AuctionEntry* auctionEntry = new AuctionEntry();
     auctionEntry->Id = sObjectMgr->GenerateAuctionID();
-    auctionEntry->itemGuidLow = item->GetGUID().GetCounter();
-    auctionEntry->itemTemplate = item->GetEntry();
+    auctionEntry->houseId = AuctionHouseId(ahEntry->houseId);
+    auctionEntry->item_guid = item->GetGUID();
+    auctionEntry->item_template = item->GetEntry();
     auctionEntry->itemCount = item->GetCount();
-    auctionEntry->itemRandomPropertyId = item->GetItemRandomPropertyId();
-    auctionEntry->owner = bot->GetGUID().GetCounter();
+    auctionEntry->owner = bot->GetGUID();
     auctionEntry->startbid = bidPrice;
-    auctionEntry->bidder = 0;
+    auctionEntry->bidder = ObjectGuid::Empty;
     auctionEntry->bid = 0;
     auctionEntry->buyout = buyoutPrice;
-    auctionEntry->expireTime = time(nullptr) + auction_time;
-    //auctionEntry->moneyDeliveryTime = 0;
-    auctionEntry->deposit = 0;
+    auctionEntry->expire_time = GameTime::GetGameTime().count() + auctionTime;
+    auctionEntry->deposit = deposit;
     auctionEntry->auctionHouseEntry = ahEntry;
 
+    sAuctionMgr->AddAItem(item);
     auctionHouse->AddAuction(auctionEntry);
 
-    sAuctionMgr.AddAItem(item);
+    bot->MoveItemFromInventory(item->GetBagSlot(), item->GetSlot(), true);
 
-    item->SaveToDB();
-    auctionEntry->SaveToDB();
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    item->DeleteFromInventoryDB(trans);
+    item->SaveToDB(trans);
+    auctionEntry->SaveToDB(trans);
+    bot->SaveInventoryAndGoldToDB(trans);
+    CharacterDatabase.CommitTransaction(trans);
 
-    LOG_ERROR("playerbots", "AhBot {} added {} of {} to auction {} for {}..{}", bot->GetName().c_str(), stackCount,
-proto->Name1.c_str(), 1, bidPrice, buyoutPrice);
-
-    if (oldItem->GetCount() > stackCount)
-        oldItem->SetCount(oldItem->GetCount() - stackCount);
-    else
-        bot->RemoveItem(item->GetBagSlot(), item->GetSlot(), true);
+    LOG_INFO("playerbots", "Playerbot {} listed {} of {} on the auction house for {}..{} copper (deposit {})",
+              bot->GetName(), stackCount, proto->Name1, bidPrice, buyoutPrice, deposit);
 
     return true;
 }
-*/
 
 bool StoreLootAction::Execute(Event event)
 {
