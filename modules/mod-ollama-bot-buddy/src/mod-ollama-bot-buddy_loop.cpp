@@ -1234,7 +1234,16 @@ static std::string QueryOllamaLLM(const std::string& prompt)
     cli.set_connection_timeout(10, 0);
     cli.set_read_timeout(120, 0); // director prompts can take a while under load
 
-    auto res = cli.Post(path, requestDataStr, "application/json");
+    // Heimdall (ADR-022): identity + lane attribution (+ optional proxy token)
+    httplib::Headers hmlHeaders = {
+        {"X-Atriarch-Consumer", "azerothcore"},
+        {"X-Atriarch-Subroutine", "bot-director"}
+    };
+    if (!g_OllamaBotControlHeimdallToken.empty())
+    {
+        hmlHeaders.emplace("Authorization", "Bearer " + g_OllamaBotControlHeimdallToken);
+    }
+    auto res = cli.Post(path, hmlHeaders, requestDataStr, "application/json");
     if (!res || res->status != 200)
     {
         LOG_INFO("server.loading", "[OllamaBotBuddy] Failed to reach Ollama AI (status {}).",
