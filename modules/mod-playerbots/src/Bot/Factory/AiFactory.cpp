@@ -601,6 +601,12 @@ void AiFactory::AddDefaultNonCombatStrategies(Player* player, PlayerbotAI* const
         if (sPlayerbotAIConfig.randomBotJoinLfg)
             nonCombatEngine->addStrategy("lfg", false);
 
+        // Dungeon progression driver (docs/dungeon-progression-driver.md): attached to every
+        // random bot - leaders and followers alike, since the all-bot tank anchor sits in the
+        // follower branch below - and self-gates on actually being the group's navigation leader.
+        if (sPlayerbotAIConfig.dungeonLeadNavigation)
+            nonCombatEngine->addStrategy("dungeon lead", false);
+
         // Managed groups (e.g. mod-ollama-bot-buddy's guild dungeon runs) are led by a bot, not
         // a real player, so the ungrouped-or-leader check alone never fires for their
         // followers - they'd otherwise fall into the `else` branch below and never get

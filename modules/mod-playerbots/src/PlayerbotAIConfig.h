@@ -485,6 +485,13 @@ public:
     // validates it, per this project's "CI is the only deployer" convention.
     bool autoAuctionSell;
 
+    // Dungeon progression driver (docs/dungeon-progression-driver.md): a bot that is its dungeon
+    // group's navigation leader walks the run toward the nearest alive boss instead of following
+    // its master in circles. Master switch + the two pacing knobs its readiness gate uses.
+    bool dungeonLeadNavigation;
+    float dungeonLeadMaxPartyGap;
+    uint32 dungeonLeadRestThreshold;
+
     std::string const GetTimestampStr();
     bool hasLog(std::string const fileName)
     {

@@ -27,6 +27,7 @@
 #include "CombatActions.h"
 #include "DelayAction.h"
 #include "DestroyItemAction.h"
+#include "DungeonLeadAction.h"
 #include "EmoteAction.h"
 #include "FollowActions.h"
 #include "GenericActions.h"
@@ -102,6 +103,7 @@ public:
         creators["flee"] = &ActionContext::flee;
         creators["flee with pet"] = &ActionContext::flee_with_pet;
         creators["avoid aoe"] = &ActionContext::avoid_aoe;
+        creators["dungeon lead move"] = &ActionContext::dungeon_lead_move;
         creators["combat formation move"] = &ActionContext::combat_formation_move;
         creators["tank face"] = &ActionContext::tank_face;
         creators["rear flank"] = &ActionContext::rear_flank;
@@ -323,6 +325,7 @@ private:
     static Action* flee(PlayerbotAI* botAI) { return new FleeAction(botAI); }
     static Action* flee_with_pet(PlayerbotAI* botAI) { return new FleeWithPetAction(botAI); }
     static Action* avoid_aoe(PlayerbotAI* botAI) { return new AvoidAoeAction(botAI); }
+    static Action* dungeon_lead_move(PlayerbotAI* botAI) { return new DungeonLeadMoveAction(botAI); }
     static Action* combat_formation_move(PlayerbotAI* botAI) { return new CombatFormationMoveAction(botAI); }
     static Action* tank_face(PlayerbotAI* botAI) { return new TankFaceAction(botAI); }
     static Action* rear_flank(PlayerbotAI* botAI) { return new RearFlankAction(botAI); }

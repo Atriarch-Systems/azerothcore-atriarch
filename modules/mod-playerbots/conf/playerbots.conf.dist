@@ -795,6 +795,23 @@ AiPlayerbot.AuctionOutcomeDirect = 1
 # Default: 10
 AiPlayerbot.MaxActiveAuctionsPerBot = 10
 
+# Dungeon progression driver: a bot that is its dungeon group's navigation
+# leader (the Group-leader-flag bot when a real player is along without lead,
+# or the tank anchor in an all-bot LFG group) walks the run toward the nearest
+# alive dungeon boss instead of following its master in circles.
+# Default: 1 (enabled)
+AiPlayerbot.DungeonLeadNavigation = 1
+
+# Pause the drive while any same-map group member is farther than this many
+# yards from the leader (a lagging real player pauses the run).
+# Default: 40
+AiPlayerbot.DungeonLeadMaxPartyGap = 40
+
+# Pause the drive while any same-map BOT member's health or mana percentage is
+# below this (real players' resources are their own business).
+# Default: 70
+AiPlayerbot.DungeonLeadRestThreshold = 70
+
 # --- Bot economy (docs/bot-economy.md) ---
 
 # Spare trade goods and sellable (AH-taggable) gear from the factory's periodic

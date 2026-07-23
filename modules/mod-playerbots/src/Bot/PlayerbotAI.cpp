@@ -4513,6 +4513,78 @@ Player* PlayerbotAI::FindNewMaster()
     return nullptr;
 }
 
+Player* PlayerbotAI::GetDungeonNavigationLeader()
+{
+    // docs/dungeon-progression-driver.md. Keep the cheap universally-false checks first: this is
+    // called from FollowAction::isUseful() for every grouped bot, and outside instances it must
+    // cost no more than a couple of pointer checks.
+    if (!sPlayerbotAIConfig.dungeonLeadNavigation)
+        return nullptr;
+
+    Group* group = bot->GetGroup();
+    if (!group)
+        return nullptr;
+
+    Map* map = bot->GetMap();
+    if (!map || !map->IsDungeon())
+        return nullptr;
+
+    // Canonical real-player detection per the 6d4c27a lesson: a .bot self-controlled human has a
+    // non-null AI shell with IsRealPlayer() == true, so a bare GET_PLAYERBOT_AI null-check
+    // misclassifies them as a bot.
+    bool anyRealPlayer = false;
+    for (GroupReference* gref = group->GetFirstMember(); gref; gref = gref->next())
+    {
+        Player* member = gref->GetSource();
+        if (!member)
+            continue;
+
+        PlayerbotAI* memberAI = GET_PLAYERBOT_AI(member);
+        if (!memberAI || memberAI->IsRealPlayer())
+        {
+            anyRealPlayer = true;
+            break;
+        }
+    }
+
+    if (anyRealPlayer)
+    {
+        // A real player is along for the run: the Group leader-flag holder drives, but only if
+        // that flag sits on a random bot (AutoLeaderHandoff=0 keeps it there when the coin flip
+        // says so - see docs/dungeon-leadership-and-summon.md section 1). A real-player leader
+        // means the player leads exactly as before this feature, and a player-owned alt bot
+        // holding lead stays player-directed rather than wandering off boss-ward on its own.
+        Player* leader = ObjectAccessor::FindPlayer(group->GetLeaderGUID());
+        if (!leader || !leader->IsInWorld() || leader->GetMap() != map)
+            return nullptr;
+
+        PlayerbotAI* leaderAI = GET_PLAYERBOT_AI(leader);
+        if (!leaderAI || leaderAI->IsRealPlayer())
+            return nullptr;
+
+        if (!sRandomPlayerbotMgr.IsRandomBot(leader))
+            return nullptr;
+
+        return leader;
+    }
+
+    // All-bot group: the driver must be the same character everyone's master already points at,
+    // i.e. the first tank in group order that FindNewMaster()'s tier-3 fallback picks - not the
+    // leader-flag holder, who may be a different member and would otherwise stride off alone
+    // while the group stays glued to the tank.
+    for (GroupReference* gref = group->GetFirstMember(); gref; gref = gref->next())
+    {
+        Player* member = gref->GetSource();
+        if (!member || !member->IsInWorld() || member->GetMap() != map)
+            continue;
+
+        if (IsTank(member) && sRandomPlayerbotMgr.IsRandomBot(member))
+            return member;
+    }
+
+    return nullptr;
+}
+
 bool PlayerbotAI::HasRealPlayerMaster()
 {
     if (master)

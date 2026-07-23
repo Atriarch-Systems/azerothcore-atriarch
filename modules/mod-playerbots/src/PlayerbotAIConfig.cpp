@@ -474,6 +474,11 @@ bool PlayerbotAIConfig::Initialize()
     // feature-branch test (docs/session-improvements-2026-07-21.md, item 6).
     autoAuctionSell = sConfigMgr->GetOption<bool>("AiPlayerbot.AutoAuctionSell", false);
 
+    // Dungeon progression driver (docs/dungeon-progression-driver.md).
+    dungeonLeadNavigation = sConfigMgr->GetOption<bool>("AiPlayerbot.DungeonLeadNavigation", true);
+    dungeonLeadMaxPartyGap = sConfigMgr->GetOption<float>("AiPlayerbot.DungeonLeadMaxPartyGap", 40.0f);
+    dungeonLeadRestThreshold = sConfigMgr->GetOption<int32>("AiPlayerbot.DungeonLeadRestThreshold", 70);
+
     LOG_INFO("server.loading", "Loading TalentSpecs...");
 
     for (uint32 cls = 1; cls < MAX_CLASSES; ++cls)

@@ -22,6 +22,7 @@
 #include "FleeStrategy.h"
 #include "FocusTargetStrategy.h"
 #include "FollowMasterStrategy.h"
+#include "DungeonLeadStrategy.h"
 #include "GrindingStrategy.h"
 #include "GroupStrategy.h"
 #include "GuardStrategy.h"
@@ -84,6 +85,7 @@ public:
         creators["pvp"] = &StrategyContext::pvp;
         creators["return"] = &StrategyContext::_return;
         creators["lfg"] = &StrategyContext::lfg;
+        creators["dungeon lead"] = &StrategyContext::dungeon_lead;
         creators["custom"] = &StrategyContext::custom;
         creators["reveal"] = &StrategyContext::reveal;
         creators["collision"] = &StrategyContext::collision;
@@ -162,6 +164,7 @@ private:
     static Strategy* pvp(PlayerbotAI* botAI) { return new AttackEnemyPlayersStrategy(botAI); }
     static Strategy* _return(PlayerbotAI* botAI) { return new ReturnStrategy(botAI); }
     static Strategy* lfg(PlayerbotAI* botAI) { return new LfgStrategy(botAI); }
+    static Strategy* dungeon_lead(PlayerbotAI* botAI) { return new DungeonLeadStrategy(botAI); }
     static Strategy* custom(PlayerbotAI* botAI) { return new CustomStrategy(botAI); }
     static Strategy* reveal(PlayerbotAI* botAI) { return new RevealStrategy(botAI); }
     static Strategy* collision(PlayerbotAI* botAI) { return new CollisionStrategy(botAI); }

@@ -537,6 +537,12 @@ public:
     Player* GetMaster() { return master; }
     Player* FindNewMaster();
 
+    // Which member of this bot's dungeon group, if any, is the navigation driver that pushes the
+    // run forward (docs/dungeon-progression-driver.md). Shared by the "dungeon lead" trigger,
+    // action, and FollowAction's gate so they can never disagree. Returns nullptr outside
+    // dungeon/raid maps, when the feature is off, or when a real player holds the leader flag.
+    Player* GetDungeonNavigationLeader();
+
     // Checks if the bot is really a player. Players always have themselves as master.
     bool IsRealPlayer() { return master ? (master == bot) : false; }
     // Bot has a master that is a player.

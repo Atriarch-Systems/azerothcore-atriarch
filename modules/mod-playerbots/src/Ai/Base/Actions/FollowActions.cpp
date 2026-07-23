@@ -247,6 +247,15 @@ bool FollowAction::isUseful()
         botAI->HasStrategy("move from group", BOT_STATE_NON_COMBAT))
         return false;
 
+    // The dungeon progression driver must not also follow its master: with a real player in the
+    // group, FindNewMaster() makes that player everyone's master INCLUDING the driver's, and
+    // follow - a default action queued every idle tick - would drag the driver back toward the
+    // player it is supposed to be leading between "dungeon lead move" firings
+    // (docs/dungeon-progression-driver.md). GetDungeonNavigationLeader() short-circuits on
+    // group/dungeon membership, so bots outside instances pay two pointer checks here.
+    if (botAI->GetDungeonNavigationLeader() == bot)
+        return false;
+
     if (bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL) != nullptr)
         return false;
 
