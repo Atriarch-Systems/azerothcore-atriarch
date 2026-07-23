@@ -15,6 +15,15 @@ void NonCombatStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
     // own 5-minute checkInterval keeps that cheap, and AutoAuctionSellAction::isUseful() gates out
     // bots with a real, currently-active player master.
     triggers.push_back(new TriggerNode("auto auction sell", { NextAction("auto auction sell", 1.0f) }));
+    // Demand side of the bot economy (docs/bot-economy.md, Phase 3): unattended random bots near
+    // an auctioneer periodically buy out genuine gear upgrades (and, for crafters, cheap known
+    // reagents - Phase 4b). The trigger's own 5-minute checkInterval keeps this cheap, and
+    // AuctionBuyAction::isUseful() gates out bots with a real, currently-active player master.
+    triggers.push_back(new TriggerNode("auto auction buy", { NextAction("auto auction buy", 1.0f) }));
+    // Autonomous crafting (docs/bot-economy.md, Phase 4a): revives the previously-dead
+    // CraftRandomItemAction on a 10-minute cadence; it no-ops without reagents in bags and
+    // prefers self-upgrades and skill-ups.
+    triggers.push_back(new TriggerNode("auto craft", { NextAction("craft random item", 1.0f) }));
 }
 
 void CollisionStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)

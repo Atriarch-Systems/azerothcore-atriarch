@@ -795,6 +795,48 @@ AiPlayerbot.AuctionOutcomeDirect = 1
 # Default: 10
 AiPlayerbot.MaxActiveAuctionsPerBot = 10
 
+# --- Bot economy (docs/bot-economy.md) ---
+
+# Spare trade goods and sellable (AH-taggable) gear from the factory's periodic
+# bag wipe, so gathered materials and loot survive long enough to be listed.
+# Bounded: if spared items would exceed ~60% of bag capacity, only trade goods
+# are spared.
+# Default: 1 (enabled)
+AiPlayerbot.EconomyPersistInventory = 1
+
+# Make the factory's gold writes floor-only (top up a destitute bot, never
+# overwrite an earning bot's wealth), so earned income persists.
+# Default: 1 (enabled)
+AiPlayerbot.EconomyPersistGold = 1
+
+# Per-item flood cap: skip listing when this many active auctions of the same
+# item already exist in the house, and destroy (instead of return) expired bot
+# auctions of over-cap items - the economy's item sink. 0 disables both.
+# Default: 25
+AiPlayerbot.MaxAuctionsPerItem = 25
+
+# Unattended random bots near an auctioneer periodically buy genuine gear
+# upgrades (and, for crafters, cheap reagents for known recipes) at buyout,
+# capped by the existing per-need budget system.
+# Default: 1 (enabled)
+AiPlayerbot.AutoAuctionBuy = 1
+
+# Maximum auction purchases per buying pass.
+# Default: 1
+AiPlayerbot.AuctionBuyMaxPerPass = 1
+
+# Unattended random bots periodically craft from reagents in their bags
+# (prefers self-upgrades and skill-ups; no-ops without materials).
+# Default: 1 (enabled)
+AiPlayerbot.AutoCraft = 1
+
+# Real economic sinks: skip the factory's free consumable restocks and free
+# repairs for random bots, so they spend real gold at NPCs instead. Ships
+# DISABLED - flipping this changes all random bots' self-sufficiency and
+# deserves its own observation window (see docs/bot-economy.md Phase 5).
+# Default: 0 (disabled)
+AiPlayerbot.EconomyRealSinks = 0
+
 # Enable/Disable periodic online - offline of randombots to mimic the real-world scenario where not all players are online simultaneously
 # When enabled, randombots are randomly selected to go online or offline periodically from a larger set
 # Default: 0 (disabled, the set of online bots remains fixed)

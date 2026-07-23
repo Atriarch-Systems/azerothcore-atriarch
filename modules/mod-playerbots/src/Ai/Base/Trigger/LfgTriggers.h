@@ -49,4 +49,19 @@ public:
     std::string const GetTargetName() override { return "lfg latecomer"; }
 };
 
+// Fires for a bot leading an LFG group inside a dungeon while at least one real player is in the
+// group, so the leader can announce - exactly once per group+instance - that it will lead unless
+// asked to hand leadership over (docs/bot-economy.md, Phase 1f). Same leader-only + dungeon-map
+// gating as LfgLatecomerTrigger above. The one-shot bookkeeping (and its reset when the group or
+// instance changes) lives in LfgLeaderAnnounceAction, keyed by group+instance, so this trigger
+// stays stateless and just keeps offering the cheap condition; the action no-ops after it has
+// said its line. Paired via the "lfg" strategy (LfgStrategy.cpp).
+class LfgLeaderAnnounceTrigger : public Trigger
+{
+public:
+    LfgLeaderAnnounceTrigger(PlayerbotAI* botAI) : Trigger(botAI, "lfg leader announce", 10 * 1000) {}
+
+    bool IsActive() override;
+};
+
 #endif

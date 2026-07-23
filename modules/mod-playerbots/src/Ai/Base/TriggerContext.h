@@ -9,6 +9,7 @@
 
 #include "AuctionTriggers.h"
 #include "CureTriggers.h"
+#include "EconomyTriggers.h"
 #include "FishingTriggers.h"
 #include "GenericTriggers.h"
 #include "GuildTriggers.h"
@@ -84,6 +85,8 @@ public:
 
         creators["loot available"] = &TriggerContext::LootAvailable;
         creators["auto auction sell"] = &TriggerContext::auto_auction_sell;
+        creators["auto auction buy"] = &TriggerContext::auto_auction_buy;
+        creators["auto craft"] = &TriggerContext::auto_craft;
         creators["no attackers"] = &TriggerContext::NoAttackers;
         creators["no target"] = &TriggerContext::NoTarget;
         creators["target in sight"] = &TriggerContext::TargetInSight;
@@ -167,6 +170,7 @@ public:
 
         creators["unknown dungeon"] = &TriggerContext::unknown_dungeon;
         creators["lfg latecomer"] = &TriggerContext::lfg_latecomer;
+        creators["lfg leader announce"] = &TriggerContext::lfg_leader_announce;
 
         creators["random bot update"] = &TriggerContext::random_bot_update_trigger;
         creators["no non bot players around"] = &TriggerContext::no_non_bot_players_around;
@@ -267,6 +271,7 @@ private:
     static Trigger* lfg_proposal_active(PlayerbotAI* botAI) { return new LfgProposalActiveTrigger(botAI); }
     static Trigger* unknown_dungeon(PlayerbotAI* botAI) { return new UnknownDungeonTrigger(botAI); }
     static Trigger* lfg_latecomer(PlayerbotAI* botAI) { return new LfgLatecomerTrigger(botAI); }
+    static Trigger* lfg_leader_announce(PlayerbotAI* botAI) { return new LfgLeaderAnnounceTrigger(botAI); }
     static Trigger* invalid_target(PlayerbotAI* botAI) { return new InvalidTargetTrigger(botAI); }
     static Trigger* critical_aoe_heal(PlayerbotAI* botAI)
     {
@@ -334,6 +339,8 @@ private:
     static Trigger* AlmostFullEnergyAvailable(PlayerbotAI* botAI) { return new EnergyAvailable(botAI, 90); }
     static Trigger* LootAvailable(PlayerbotAI* botAI) { return new LootAvailableTrigger(botAI); }
     static Trigger* auto_auction_sell(PlayerbotAI* botAI) { return new AutoAuctionSellTrigger(botAI); }
+    static Trigger* auto_auction_buy(PlayerbotAI* botAI) { return new AutoAuctionBuyTrigger(botAI); }
+    static Trigger* auto_craft(PlayerbotAI* botAI) { return new AutoCraftTrigger(botAI); }
     static Trigger* NoAttackers(PlayerbotAI* botAI) { return new NoAttackersTrigger(botAI); }
     static Trigger* TankAssist(PlayerbotAI* botAI) { return new TankAssistTrigger(botAI); }
     static Trigger* Timer(PlayerbotAI* botAI) { return new TimerTrigger(botAI); }

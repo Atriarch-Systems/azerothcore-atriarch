@@ -9,6 +9,7 @@
 
 #include "AddLootAction.h"
 #include "AttackAction.h"
+#include "AuctionBuyAction.h"
 #include "ShareQuestAction.h"
 #include "BattleGroundTactics.h"
 #include "AutoMaintenanceOnLevelupAction.h"
@@ -38,6 +39,7 @@
 #include "ImbueAction.h"
 #include "InviteToGroupAction.h"
 #include "LeaveGroupAction.h"
+#include "LfgLeaderAnnounceAction.h"
 #include "LootAction.h"
 #include "LootRollAction.h"
 #include "MoveToRpgTargetAction.h"
@@ -127,6 +129,8 @@ public:
         creators["attack rti target"] = &ActionContext::attack_rti_target;
         creators["loot"] = &ActionContext::loot;
         creators["auto auction sell"] = &ActionContext::auto_auction_sell;
+        creators["auto auction buy"] = &ActionContext::auto_auction_buy;
+        creators["lfg leader announce"] = &ActionContext::lfg_leader_announce;
         creators["add loot"] = &ActionContext::add_loot;
         creators["add gathering loot"] = &ActionContext::add_gathering_loot;
         creators["add all loot"] = &ActionContext::add_all_loot;
@@ -357,6 +361,8 @@ private:
     static Action* add_all_loot(PlayerbotAI* botAI) { return new AddAllLootAction(botAI); }
     static Action* loot(PlayerbotAI* botAI) { return new LootAction(botAI); }
     static Action* auto_auction_sell(PlayerbotAI* botAI) { return new AutoAuctionSellAction(botAI); }
+    static Action* auto_auction_buy(PlayerbotAI* botAI) { return new AuctionBuyAction(botAI); }
+    static Action* lfg_leader_announce(PlayerbotAI* botAI) { return new LfgLeaderAnnounceAction(botAI); }
     static Action* release_loot(PlayerbotAI* botAI) { return new ReleaseLootAction(botAI); }
     static Action* dps_assist(PlayerbotAI* botAI) { return new DpsAssistAction(botAI); }
     static Action* dps_aoe(PlayerbotAI* botAI) { return new DpsAoeAction(botAI); }

@@ -20,6 +20,7 @@
 #include "ServerFacade.h"
 #include "GuildMgr.h"
 #include "BroadcastHelper.h"
+#include "World.h"
 
 #include <algorithm>
 #include <mutex>
@@ -298,13 +299,50 @@ namespace
 
     constexpr time_t BOT_AUCTION_COUNT_CACHE_TTL = 3 * MINUTE;
 
+    // Per-house entry -> active-listing count, refreshed by the same full house scan that refreshes
+    // the per-bot count above (one iteration feeds both caches). Backs the per-item flood cap
+    // (AiPlayerbot.MaxAuctionsPerItem) and, via BotAuctionMarket::GetCachedAuctionCountForEntry(),
+    // the expired-overpopulation item sink in BotAuctionOutcomeScript. Keyed by houseId.
+    struct HouseEntryCounts
+    {
+        time_t validUntil = 0;
+        std::unordered_map<uint32, uint32> counts;
+    };
+
     std::mutex botAuctionCountLock;
     std::unordered_map<uint64, BotAuctionCount> botAuctionCountCache;
+    std::unordered_map<uint32, HouseEntryCounts> houseEntryCountCache;
 
     uint64 BotAuctionCountKey(AuctionHouseEntry const* ahEntry, Player const* bot)
     {
         return (uint64(ahEntry->houseId) << 32) | bot->GetGUID().GetCounter();
     }
+}
+
+uint32 BotAuctionMarket::GetMaxAuctionsPerItem()
+{
+    // Per-house cap on simultaneously active listings of a single item entry, 0 = off. Shared by
+    // the listing-side skip in AuctionItem() and the expiry-side item sink in
+    // BotAuctionOutcomeScript.
+    static uint32 const maxAuctionsPerItem = sConfigMgr->GetOption<uint32>("AiPlayerbot.MaxAuctionsPerItem", 25);
+    return maxAuctionsPerItem;
+}
+
+uint32 BotAuctionMarket::GetCachedAuctionCountForEntry(uint32 houseId, uint32 itemEntry)
+{
+    std::lock_guard<std::mutex> lock(botAuctionCountLock);
+    auto const houseItr = houseEntryCountCache.find(houseId);
+    if (houseItr == houseEntryCountCache.end())
+        return 0;
+
+    // A stale cache means no bot has listed in this house for a few minutes; report "unknown" (0)
+    // rather than a snapshot old enough to have drifted - the expiry-side caller destroys items
+    // based on this number, so under-reporting (item survives) is the safe direction.
+    if (houseItr->second.validUntil <= GameTime::GetGameTime().count())
+        return 0;
+
+    auto const entryItr = houseItr->second.counts.find(itemEntry);
+    return entryItr != houseItr->second.counts.end() ? entryItr->second : 0;
 }
 
 // This was previously dead code (wrapped in a block comment) written against an older
@@ -326,19 +364,18 @@ namespace
 //     the real "talk to an Auctioneer" packet handler does - there's no "list remotely" API. Callers
 //     (SellVendorItemsVisitor, AutoAuctionSellAction) are expected to already be near one; this
 //     function is also safe to call speculatively since it just returns false if none is in range.
-bool StoreLootAction::AuctionItem(uint32 itemId, PlayerbotAI* botAI)
+bool StoreLootAction::AuctionItem(Item* item, PlayerbotAI* botAI)
 {
     Player* bot = botAI->GetBot();
 
-    ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+    if (!item)
+        return false;
+
+    ItemTemplate const* proto = item->GetTemplate();
     if (!proto)
         return false;
 
     if (proto->Bonding == BIND_WHEN_PICKED_UP || proto->Bonding == BIND_QUEST_ITEM)
-        return false;
-
-    Item* item = bot->GetItemByEntry(itemId);
-    if (!item)
         return false;
 
     // Mirrors the sanity checks the real HandleAuctionSellItem packet handler runs before it lets
@@ -371,29 +408,60 @@ bool StoreLootAction::AuctionItem(uint32 itemId, PlayerbotAI* botAI)
     if (!auctionHouse)
         return false;
 
-    // Per-bot active-auction cap - without one, hundreds of autonomous sellers grow their listing
-    // footprint without bound. Uses the cached per-bot count (see BotAuctionCount above) instead of
-    // rescanning the house per item; the cache is bumped locally on every successful listing so the
-    // cap holds within the TTL window too.
+    // Flood caps - without them, hundreds of autonomous sellers grow their listing footprint
+    // without bound (per bot) and pile identical gathered mats sky-high (per item). Both counts
+    // come from the same cached full house scan (one iteration feeds the per-bot cache and the
+    // per-house entry-count cache) instead of rescanning per listing attempt; both caches are
+    // bumped locally on every successful listing so the caps hold within the TTL window too.
     static uint32 const maxActiveAuctionsPerBot =
         sConfigMgr->GetOption<uint32>("AiPlayerbot.MaxActiveAuctionsPerBot", 10);
+    uint32 const maxAuctionsPerItem = BotAuctionMarket::GetMaxAuctionsPerItem();
     uint64 const countKey = BotAuctionCountKey(ahEntry, bot);
-    if (maxActiveAuctionsPerBot)
+    if (maxActiveAuctionsPerBot || maxAuctionsPerItem)
     {
         std::lock_guard<std::mutex> lock(botAuctionCountLock);
-        BotAuctionCount& cached = botAuctionCountCache[countKey];
-        if (cached.validUntil <= GameTime::GetGameTime().count())
+        time_t const now = GameTime::GetGameTime().count();
+        BotAuctionCount& cachedBot = botAuctionCountCache[countKey];
+        HouseEntryCounts& cachedHouse = houseEntryCountCache[ahEntry->houseId];
+        bool const refreshBot = maxActiveAuctionsPerBot && cachedBot.validUntil <= now;
+        bool const refreshHouse = maxAuctionsPerItem && cachedHouse.validUntil <= now;
+        if (refreshBot || refreshHouse)
         {
-            cached.count = 0;
-            for (auto const& auctionPair : auctionHouse->GetAuctions())
-                if (auctionPair.second->owner == bot->GetGUID())
-                    ++cached.count;
+            if (refreshBot)
+            {
+                cachedBot.count = 0;
+                cachedBot.validUntil = now + BOT_AUCTION_COUNT_CACHE_TTL;
+            }
 
-            cached.validUntil = GameTime::GetGameTime().count() + BOT_AUCTION_COUNT_CACHE_TTL;
+            if (refreshHouse)
+            {
+                cachedHouse.counts.clear();
+                cachedHouse.validUntil = now + BOT_AUCTION_COUNT_CACHE_TTL;
+            }
+
+            for (auto const& auctionPair : auctionHouse->GetAuctions())
+            {
+                if (refreshBot && auctionPair.second->owner == bot->GetGUID())
+                    ++cachedBot.count;
+
+                if (refreshHouse)
+                    ++cachedHouse.counts[auctionPair.second->item_template];
+            }
         }
 
-        if (cached.count >= maxActiveAuctionsPerBot)
+        if (maxActiveAuctionsPerBot && cachedBot.count >= maxActiveAuctionsPerBot)
             return false;
+
+        if (maxAuctionsPerItem)
+        {
+            auto const entryItr = cachedHouse.counts.find(item->GetEntry());
+            if (entryItr != cachedHouse.counts.end() && entryItr->second >= maxAuctionsPerItem)
+            {
+                LOG_DEBUG("playerbots", "Playerbot {} skipping auction of {}: {} active listings >= per-item cap {}",
+                    bot->GetName(), proto->Name1, entryItr->second, maxAuctionsPerItem);
+                return false;
+            }
+        }
     }
 
     uint32 stackCount = item->GetCount();
@@ -422,9 +490,14 @@ bool StoreLootAction::AuctionItem(uint32 itemId, PlayerbotAI* botAI)
     bidPrice = std::max(bidPrice, vendorValue);
     buyoutPrice = std::max(buyoutPrice, bidPrice);
 
-    uint32 auctionTime = uint32(MIN_AUCTION_TIME * sWorld->getRate(RATE_AUCTION_TIME));
+    // 48h - the longest listing a real client can request (HandleAuctionSellItem only accepts
+    // 1x/2x/4x MIN_AUCTION_TIME). Longer listings mean more time to find a buyer per deposit paid.
+    // Deposit parity with the real handler: it computes the deposit from the UN-rated etime and
+    // applies RATE_AUCTION_TIME only to the actual expiry, so do the same here.
+    uint32 const etime = 4 * MIN_AUCTION_TIME;
+    uint32 auctionTime = uint32(etime * sWorld->getRate(RATE_AUCTION_TIME));
 
-    uint32 deposit = AuctionHouseMgr::GetAuctionDeposit(ahEntry, auctionTime, item, stackCount);
+    uint32 deposit = AuctionHouseMgr::GetAuctionDeposit(ahEntry, etime, item, stackCount);
     if (!bot->HasEnoughMoney(deposit))
         return false;
 
@@ -457,13 +530,18 @@ bool StoreLootAction::AuctionItem(uint32 itemId, PlayerbotAI* botAI)
     bot->SaveInventoryAndGoldToDB(trans);
     CharacterDatabase.CommitTransaction(trans);
 
-    // Keep the cached per-bot listing count honest between full rescans (no-op if the cap is
-    // disabled - the cache entry only exists when the cap check above ran).
+    // Keep the cached per-bot listing count and per-house entry count honest between full rescans
+    // (no-ops if the caps are disabled - the cache entries only exist when the cap checks above
+    // ran).
     {
         std::lock_guard<std::mutex> lock(botAuctionCountLock);
         auto const cachedItr = botAuctionCountCache.find(countKey);
         if (cachedItr != botAuctionCountCache.end())
             ++cachedItr->second.count;
+
+        auto const houseItr = houseEntryCountCache.find(ahEntry->houseId);
+        if (houseItr != houseEntryCountCache.end())
+            ++houseItr->second.counts[auctionEntry->item_template];
     }
 
     LOG_INFO("playerbots", "Playerbot {} listed {} of {} on the auction house for {}..{} copper (deposit {})",

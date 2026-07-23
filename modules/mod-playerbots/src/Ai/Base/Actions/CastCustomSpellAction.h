@@ -63,6 +63,14 @@ class CraftRandomItemAction : public CastRandomSpellAction
 public:
     CraftRandomItemAction(PlayerbotAI* botAI) : CastRandomSpellAction(botAI, "craft random item") { MultiCast = true; }
 
+    // CastRandomSpellAction's blanket isUseful() == false made this action dead code on every
+    // engine path (Engine checks isUseful() before Execute() both for triggered and specific
+    // actions) - including the legacy rpg one it was written for. Overridden so the autonomous
+    // AutoCraftTrigger path (EconomyTriggers.h, docs/bot-economy.md Phase 4a) can actually run
+    // it; Execute() itself has no master dependency (targets fall back to self) and no-ops
+    // without reagents in bags.
+    bool isUseful() override;
+
     bool AcceptSpell(SpellInfo const* spellInfo) override;
     uint32 GetSpellPriority(SpellInfo const* spellInfo) override;
 };

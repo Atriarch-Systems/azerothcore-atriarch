@@ -20,6 +20,7 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "ChannelMgr.h"
+#include "Config.h"
 #include "DBCStores.h"
 #include "DBCStructure.h"
 #include "DatabaseEnv.h"
@@ -2234,7 +2235,12 @@ void RandomPlayerbotMgr::Refresh(Player* bot)
 
     botAI->Reset();
 
-    bot->DurabilityRepairAll(false, 1.0f, false);
+    // Phase 5 (bot economy, AiPlayerbot.EconomyRealSinks, default off): random bots stop getting
+    // free repairs on the refresh cycle - they pay for repairs with real gold instead.
+    static bool const economyRealSinks =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.EconomyRealSinks", false);
+    if (!economyRealSinks || !IsRandomBot(bot))
+        bot->DurabilityRepairAll(false, 1.0f, false);
     bot->SetFullHealth();
     bot->SetPvP(sWorld->IsPvPRealm());
     PlayerbotFactory factory(bot, bot->GetLevel());

@@ -13,6 +13,8 @@
 #include "Playerbots.h"
 #include "ItemPackets.h"
 
+#include <unordered_map>
+
 class SellItemsVisitor : public IterateItemsVisitor
 {
 public:
@@ -62,7 +64,7 @@ public:
         // vendor-sell packet below.
         if (usage == ITEM_USAGE_AH)
         {
-            if (StoreLootAction::AuctionItem(item->GetEntry(), botAI))
+            if (StoreLootAction::AuctionItem(item, botAI))
                 return true;
 
             // No auctioneer in range (or the listing failed / hit the per-bot cap): KEEP the item
@@ -177,13 +179,49 @@ bool AutoAuctionSellAction::Execute(Event /*event*/)
     std::vector<Item*> items =
         AI_VALUE2(std::vector<Item*>, "inventory items", "usage " + std::to_string(ITEM_USAGE_AH));
 
+    // For stackable entries, find the largest stack per entry first - each entry gets at most one
+    // listing per pass, and a fat stack is a far better use of a listing slot (and its deposit)
+    // than whatever tiny partial stack happens to sit first in the bags. (Cross-stack
+    // consolidation - merging partial stacks into one listing via a cloned item - is deliberately
+    // NOT done here; deferred until the simple largest-stack rule proves insufficient.)
+    std::unordered_map<uint32, Item*> largestStackByEntry;
+    for (Item* item : items)
+    {
+        if (item->GetMaxStackCount() <= 1)
+            continue;
+
+        Item*& largest = largestStackByEntry[item->GetEntry()];
+        if (!largest || item->GetCount() > largest->GetCount())
+            largest = item;
+    }
+
+    uint8 const bagSpace = AI_VALUE(uint8, "bag space");
+
     uint32 listed = 0;
     for (Item* item : items)
     {
         if (listed >= MAX_AUTO_AUCTION_ITEMS_PER_CHECK)
             break;
 
-        if (StoreLootAction::AuctionItem(item->GetEntry(), botAI))
+        // Non-stackables can't do better than being listed as-is, in bag order, as before.
+        if (item->GetMaxStackCount() > 1)
+        {
+            // Only the entry's largest stack represents it; skip the smaller duplicates.
+            Item* largest = largestStackByEntry[item->GetEntry()];
+            if (item != largest)
+                continue;
+
+            // Trade goods trickle in from gathering and will keep growing toward a full stack -
+            // don't waste a deposit listing a half-empty one yet. Override when the bags are
+            // nearly full (same >= 90% threshold the vendor fallback above uses): freeing the
+            // slot now beats hoarding toward a fuller stack the bot has no room to collect.
+            ItemTemplate const* proto = item->GetTemplate();
+            if (proto->Class == ITEM_CLASS_TRADE_GOODS && item->GetCount() < proto->GetMaxStackSize() / 2 &&
+                bagSpace < 90)
+                continue;
+        }
+
+        if (StoreLootAction::AuctionItem(item, botAI))
             ++listed;
     }
 

@@ -303,6 +303,8 @@ bool CastRandomSpellAction::Execute(Event event)
     return false;
 }
 
+bool CraftRandomItemAction::isUseful() { return !bot->IsInCombat(); }
+
 bool CraftRandomItemAction::AcceptSpell(SpellInfo const* spellInfo)
 {
     return spellInfo->Effects[EFFECT_0].Effect == SPELL_EFFECT_CREATE_ITEM && spellInfo->ReagentCount[EFFECT_0] > 0 &&
@@ -311,7 +313,10 @@ bool CraftRandomItemAction::AcceptSpell(SpellInfo const* spellInfo)
 
 uint32 CraftRandomItemAction::GetSpellPriority(SpellInfo const* spellInfo)
 {
-    if (spellInfo->Effects[EFFECT_0].Effect != SPELL_EFFECT_CREATE_ITEM)
+    // This condition was inverted (!=) - AcceptSpell() only ever admits CREATE_ITEM spells, so
+    // the upgrade/skill-up preference below never ran and every recipe got priority 1. Fixed to
+    // == so the action actually "prefers self-upgrades and skill-ups" as documented.
+    if (spellInfo->Effects[EFFECT_0].Effect == SPELL_EFFECT_CREATE_ITEM)
     {
         uint32 newItemId = spellInfo->Effects[EFFECT_0].ItemType;
         if (newItemId)

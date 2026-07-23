@@ -12,6 +12,7 @@
 #include "AiFactory.h"
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
+#include "Config.h"
 #include "DBCStores.h"
 #include "DBCStructure.h"
 #include "GuildMgr.h"
@@ -864,7 +865,13 @@ void PlayerbotFactory::Randomize(bool incremental)
 
     pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "PlayerbotFactory_Save");
     LOG_DEBUG("playerbots", "Saving to DB...");
-    bot->SetMoney(urand(level * 100000, level * 5 * 100000));
+    // Phase 0b (bot economy): floor-only gold seeding - never overwrite an earning bot's wealth.
+    // A bot below the floor still gets the full random roll so fresh bots seed as before.
+    static bool const economyPersistGold =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.EconomyPersistGold", true);
+    uint32 const moneyFloor = level * 100000;
+    if (!economyPersistGold || bot->GetMoney() < moneyFloor)
+        bot->SetMoney(urand(moneyFloor, level * 5 * 100000));
     bot->SetHealth(bot->GetMaxHealth());
     bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
     bot->SaveToDB(false, false);
@@ -883,11 +890,21 @@ void PlayerbotFactory::Refresh()
     // }
     InitAttunementQuests();
     ClearInventory();
-    InitAmmo();
+    // Phase 5 (bot economy, AiPlayerbot.EconomyRealSinks, default off): random bots stop getting
+    // free consumable restocks and free repairs on refresh - they buy/repair with real gold
+    // instead. Masters' bots (".bot refresh" via PlayerbotMgr) are unaffected.
+    static bool const economyRealSinks =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.EconomyRealSinks", false);
+    bool const skipFreeUpkeep = economyRealSinks && sRandomPlayerbotMgr.IsRandomBot(bot);
+    if (!skipFreeUpkeep)
+        InitAmmo();
     InitFood();
-    InitReagents();
-    InitConsumables();
-    InitPotions();
+    if (!skipFreeUpkeep)
+    {
+        InitReagents();
+        InitConsumables();
+        InitPotions();
+    }
     InitPet();
     InitPetTalents();
     InitSkills();
@@ -904,7 +921,8 @@ void PlayerbotFactory::Refresh()
     }
     if (bot->GetLevel() >= sPlayerbotAIConfig.minEnchantingBotLevel)
         ApplyEnchantAndGemsNew();
-    bot->DurabilityRepairAll(false, 1.0f, false);
+    if (!skipFreeUpkeep)
+        bot->DurabilityRepairAll(false, 1.0f, false);
     if (bot->isDead())
         bot->ResurrectPlayer(1.0f, false);
     uint32 money = urand(level * 1000, level * 5 * 1000);
@@ -1713,10 +1731,87 @@ void PlayerbotFactory::InitTalentsByParsedSpecLink(Player* bot, std::vector<std:
     bot->SendTalentsInfoData(false);
 }
 
+// Phase 0a (bot economy, AiPlayerbot.EconomyPersistInventory, default on): how much the destroy
+// visitor may spare so gathered materials and AH-sellable gear survive factory refresh cycles.
+enum EconomySpareMode : uint8
+{
+    ECONOMY_SPARE_NONE,
+    ECONOMY_SPARE_TRADE_GOODS,
+    ECONOMY_SPARE_TRADE_GOODS_AND_AH_GEAR
+};
+
+// Raw approximation of the ITEM_USAGE_AH predicate from ItemUsageValue::QueryItemUsage
+// (Quality >= NORMAL, not soulbound, Bonding != BIND_WHEN_PICKED_UP, BuyPrice > 0,
+// SellPrice > 0). The destroy visitor runs in factory paths (login/randomize/refresh) where a
+// PlayerbotAI/AiObjectContext is not reliably available, so the full ItemUsageValue evaluation
+// cannot be used here. Applies only to unequipped, equippable items.
+static bool IsEconomyAhGear(Item const* item)
+{
+    if (item->IsEquipped())
+        return false;
+
+    ItemTemplate const* proto = item->GetTemplate();
+    if (proto->InventoryType == INVTYPE_NON_EQUIP)
+        return false;
+
+    return proto->Quality >= ITEM_QUALITY_NORMAL && !item->IsSoulBound() &&
+           proto->Bonding != BIND_WHEN_PICKED_UP && proto->BuyPrice > 0 && proto->SellPrice > 0;
+}
+
+static bool ShouldSpareEconomyItem(Item const* item, EconomySpareMode mode)
+{
+    if (mode == ECONOMY_SPARE_NONE)
+        return false;
+
+    if (item->GetTemplate()->Class == ITEM_CLASS_TRADE_GOODS)
+        return true;
+
+    return mode == ECONOMY_SPARE_TRADE_GOODS_AND_AH_GEAR && IsEconomyAhGear(item);
+}
+
+// Full sparing (trade goods + AH-sellable gear) unless that would hold more than ~60% of bag
+// capacity, in which case only trade goods survive - prevents a full-bag deadlock with the
+// factory's own restocking.
+static EconomySpareMode ComputeEconomySpareMode(Player* bot)
+{
+    static bool const economyPersistInventory =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.EconomyPersistInventory", true);
+    if (!economyPersistInventory)
+        return ECONOMY_SPARE_NONE;
+
+    uint32 totalSlots = INVENTORY_SLOT_ITEM_END - INVENTORY_SLOT_ITEM_START;
+    uint32 spared = 0;
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        if (Item const* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            if (ShouldSpareEconomyItem(item, ECONOMY_SPARE_TRADE_GOODS_AND_AH_GEAR))
+                ++spared;
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+    {
+        Bag const* bag = (Bag*)bot->GetItemByPos(INVENTORY_SLOT_BAG_0, bagSlot);
+        if (!bag)
+            continue;
+
+        totalSlots += bag->GetBagSize();
+        for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+            if (Item const* item = bag->GetItemByPos(slot))
+                if (ShouldSpareEconomyItem(item, ECONOMY_SPARE_TRADE_GOODS_AND_AH_GEAR))
+                    ++spared;
+    }
+
+    if (spared * 100 > totalSlots * 60)
+        return ECONOMY_SPARE_TRADE_GOODS;
+
+    return ECONOMY_SPARE_TRADE_GOODS_AND_AH_GEAR;
+}
+
 class DestroyItemsVisitor : public IterateItemsVisitor
 {
 public:
-    DestroyItemsVisitor(Player* bot) : IterateItemsVisitor(), bot(bot) {}
+    DestroyItemsVisitor(Player* bot, EconomySpareMode spareMode)
+        : IterateItemsVisitor(), bot(bot), spareMode(spareMode)
+    {
+    }
 
     bool Visit(Item* item) override
     {
@@ -1726,6 +1821,9 @@ public:
             keep.insert(id);
             return true;
         }
+
+        if (ShouldSpareEconomyItem(item, spareMode))
+            return true;
 
         bot->DestroyItem(item->GetBagSlot(), item->GetSlot(), true);
         return true;
@@ -1744,6 +1842,7 @@ private:
     }
 
     Player* bot;
+    EconomySpareMode spareMode;
     std::set<uint32> keep;
 };
 
@@ -3617,13 +3716,13 @@ void PlayerbotFactory::InitInstanceQuests()
 
 void PlayerbotFactory::ClearInventory()
 {
-    DestroyItemsVisitor visitor(bot);
+    DestroyItemsVisitor visitor(bot, ComputeEconomySpareMode(bot));
     IterateItems(&visitor);
 }
 
 void PlayerbotFactory::ClearAllItems()
 {
-    DestroyItemsVisitor visitor(bot);
+    DestroyItemsVisitor visitor(bot, ComputeEconomySpareMode(bot));
     IterateItems(&visitor, ITERATE_ALL_ITEMS);
 }
 

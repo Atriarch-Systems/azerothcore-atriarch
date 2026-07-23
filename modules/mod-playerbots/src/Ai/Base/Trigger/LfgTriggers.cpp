@@ -30,3 +30,20 @@ bool LfgLatecomerTrigger::IsActive()
     // evaluated inside LfgLatecomerValue::Calculate() -- see LfgValues.h.
     return AI_VALUE(Unit*, "lfg latecomer") != nullptr;
 }
+
+bool LfgLeaderAnnounceTrigger::IsActive()
+{
+    Group* group = bot->GetGroup();
+    if (!group || !group->IsLeader(bot->GetGUID()))
+        return false;
+
+    Map* map = bot->GetMap();
+    if (!map || !map->IsDungeon())
+        return false;
+
+    // GetRealPlayersInGroup() skips playerbots but counts self-bot humans as real, matching
+    // LfgLatecomerValue's member classification. Members are only iterable while online, so this
+    // is "a real player is present" in the useful sense - the once-per-group+instance gate is the
+    // action's job (see LfgLeaderAnnounceAction.h).
+    return !botAI->GetRealPlayersInGroup().empty();
+}
