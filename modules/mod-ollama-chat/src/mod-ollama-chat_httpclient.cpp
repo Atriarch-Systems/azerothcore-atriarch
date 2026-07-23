@@ -79,6 +79,12 @@ std::string OllamaHttpClient::Post(const std::string& url, const std::string& js
                 {"User-Agent", "AzerothCore-OllamaChat/1.0"},
                 {"Accept", "application/json"}
             };
+            // Heimdall (ADR-022): identity + per-lane attribution
+            headers.emplace("X-Atriarch-Consumer", "azerothcore");
+            headers.emplace("X-Atriarch-Subroutine", g_OllamaSubroutine);
+            if (!g_HeimdallToken.empty()) {
+                headers.emplace("Authorization", "Bearer " + g_HeimdallToken);
+            }
             
             // Add ngrok bypass header if this is an ngrok URL
             if (host.find("ngrok") != std::string::npos || host.find("ngrok-free.app") != std::string::npos) {
@@ -112,6 +118,12 @@ std::string OllamaHttpClient::Post(const std::string& url, const std::string& js
                 {"User-Agent", "AzerothCore-OllamaChat/1.0"},
                 {"Accept", "application/json"}
             };
+            // Heimdall (ADR-022): identity + per-lane attribution
+            headers.emplace("X-Atriarch-Consumer", "azerothcore");
+            headers.emplace("X-Atriarch-Subroutine", g_OllamaSubroutine);
+            if (!g_HeimdallToken.empty()) {
+                headers.emplace("Authorization", "Bearer " + g_HeimdallToken);
+            }
             
             // Add ngrok bypass header if this is an ngrok URL
             if (host.find("ngrok") != std::string::npos || host.find("ngrok-free.app") != std::string::npos) {

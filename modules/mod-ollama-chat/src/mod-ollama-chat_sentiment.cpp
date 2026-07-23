@@ -62,7 +62,9 @@ float AnalyzeMessageSentiment(const std::string& message)
     }
     
     // Query the LLM for sentiment analysis
+    g_OllamaSubroutine = "sentiment";
     std::string response = QueryOllamaAPI(prompt);
+    g_OllamaSubroutine = "bot-chat";
     
     if (response.empty())
     {

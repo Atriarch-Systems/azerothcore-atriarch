@@ -42,6 +42,11 @@ extern uint32_t   g_EventChatterMaxBotsPerPlayer;
 // Ollama LLM API Configuration
 // --------------------------------------------
 extern std::string g_OllamaUrl;
+// Heimdall (ADR-022): optional proxy bearer token + per-call subroutine lane
+// (X-Atriarch-Subroutine). thread_local: random-chatter/sentiment set it around
+// their synchronous calls; the queued reactive-chat path keeps "bot-chat".
+extern std::string g_HeimdallToken;
+extern thread_local std::string g_OllamaSubroutine;
 extern std::string g_OllamaModel;
 extern uint32_t    g_OllamaNumPredict;
 extern float       g_OllamaTemperature;

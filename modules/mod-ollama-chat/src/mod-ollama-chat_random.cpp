@@ -717,7 +717,9 @@ void OllamaBotRandomChatter::HandleRandomChatter()
                     if (!botPtr) return;
                     
                     // Generate response from LLM
+                    g_OllamaSubroutine = "random-chatter";
                     std::string response = QueryOllamaAPI(prompt);
+                    g_OllamaSubroutine = "bot-chat";
                     if (response.empty())
                     {
                         if (g_DebugEnabled)
