@@ -64,4 +64,18 @@ public:
     bool IsActive() override;
 };
 
+// Fires for every grouped bot inside a dungeon once the LFG run is complete - LFGMgr::
+// FinishDungeon() has set the GROUP's state to LFG_STATE_FINISHED_DUNGEON (final encounter down,
+// reward handed out). Paired with LfgDungeonCompleteAction via the "lfg" strategy so random bots
+// announce the clear, linger a bit, then teleport out and leave like a player would
+// (docs/dungeon-progression-driver.md). 30s interval: end-of-run bookkeeping has no reason to be
+// checked more often, and the action's linger window is minutes long anyway.
+class LfgDungeonCompleteTrigger : public Trigger
+{
+public:
+    LfgDungeonCompleteTrigger(PlayerbotAI* botAI) : Trigger(botAI, "lfg dungeon complete", 30000) {}
+
+    bool IsActive() override;
+};
+
 #endif

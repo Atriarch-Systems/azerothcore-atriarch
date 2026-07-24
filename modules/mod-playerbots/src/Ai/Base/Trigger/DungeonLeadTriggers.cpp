@@ -6,6 +6,7 @@
 
 #include "DungeonLeadTriggers.h"
 
+#include "LFGMgr.h"
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
 
@@ -19,5 +20,15 @@ bool DungeonLeadNavigationTrigger::IsActive()
     if (bot->IsInCombat())
         return false;
 
-    return botAI->GetDungeonNavigationLeader() == bot;
+    if (botAI->GetDungeonNavigationLeader() != bot)
+        return false;
+
+    // A finished LFG run (group state LFG_STATE_FINISHED_DUNGEON, set by LFGMgr::FinishDungeon()
+    // when the final encounter completes) has nothing left to drive toward - stop re-pathing and
+    // let the "lfg dungeon complete" flow (announce, linger, leave) own the endgame.
+    if (Group* group = bot->GetGroup())
+        if (sLFGMgr->GetState(group->GetGUID()) == lfg::LFG_STATE_FINISHED_DUNGEON)
+            return false;
+
+    return true;
 }

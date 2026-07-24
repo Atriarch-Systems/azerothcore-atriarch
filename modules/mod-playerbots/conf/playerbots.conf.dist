@@ -812,6 +812,28 @@ AiPlayerbot.DungeonLeadMaxPartyGap = 40
 # Default: 70
 AiPlayerbot.DungeonLeadRestThreshold = 70
 
+# Never let the readiness pause above (dead member, straggler, resting bot)
+# last longer than this many seconds: once the party has been continuously
+# not-ready for this long, the driver overrides the gate and drives on until
+# the party becomes genuinely ready again. Prevents a wedged member from
+# stalling the run forever. 0 = never override (wait indefinitely).
+# Default: 120
+AiPlayerbot.DungeonLeadStallTimeoutSeconds = 120
+
+# After an LFG run's final encounter completes (LFG state FINISHED_DUNGEON),
+# unattended random bots linger this many seconds - plus a stable per-bot
+# 0-60s spread so the group trickles out - to loot and rest, then leave the
+# group (the core teleports leavers of a finished LFG run back out, with no
+# deserter debuff).
+# Default: 150
+AiPlayerbot.LfgCompleteLingerSeconds = 150
+
+# Master switch for that end-of-run auto-leave. Disabling it keeps bots in the
+# finished dungeon indefinitely (the one-line completion announcement in party
+# chat still happens).
+# Default: 1 (enabled)
+AiPlayerbot.LfgCompleteAutoLeave = 1
+
 # --- Bot economy (docs/bot-economy.md) ---
 
 # Spare trade goods and sellable (AH-taggable) gear from the factory's periodic

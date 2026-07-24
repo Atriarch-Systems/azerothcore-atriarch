@@ -540,7 +540,8 @@ public:
     // Which member of this bot's dungeon group, if any, is the navigation driver that pushes the
     // run forward (docs/dungeon-progression-driver.md). Shared by the "dungeon lead" trigger,
     // action, and FollowAction's gate so they can never disagree. Returns nullptr outside
-    // dungeon/raid maps, when the feature is off, or when a real player holds the leader flag.
+    // dungeon/raid maps, when the feature is off, or when a real player holds the leader flag
+    // while inside the instance (an absent human leader falls back to the tank-bot driver).
     Player* GetDungeonNavigationLeader();
 
     // Checks if the bot is really a player. Players always have themselves as master.

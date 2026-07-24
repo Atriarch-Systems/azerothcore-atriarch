@@ -4557,21 +4557,27 @@ Player* PlayerbotAI::GetDungeonNavigationLeader()
         // says so - see docs/dungeon-leadership-and-summon.md section 1). A real-player leader
         // means the player leads exactly as before this feature, and a player-owned alt bot
         // holding lead stays player-directed rather than wandering off boss-ward on its own.
+        //
+        // Those deferrals only apply while the flag holder is actually IN this instance: a leader
+        // who is offline, zoned out, or never entered can't lead by walking, and returning
+        // nullptr for them used to stall the run forever. An absent flag holder - human or bot -
+        // falls through to the same tank fallback the all-bot branch uses below.
         Player* leader = ObjectAccessor::FindPlayer(group->GetLeaderGUID());
-        if (!leader || !leader->IsInWorld() || leader->GetMap() != map)
-            return nullptr;
+        if (leader && leader->IsInWorld() && leader->GetMap() == map)
+        {
+            PlayerbotAI* leaderAI = GET_PLAYERBOT_AI(leader);
+            if (!leaderAI || leaderAI->IsRealPlayer())
+                return nullptr;
 
-        PlayerbotAI* leaderAI = GET_PLAYERBOT_AI(leader);
-        if (!leaderAI || leaderAI->IsRealPlayer())
-            return nullptr;
+            if (!sRandomPlayerbotMgr.IsRandomBot(leader))
+                return nullptr;
 
-        if (!sRandomPlayerbotMgr.IsRandomBot(leader))
-            return nullptr;
-
-        return leader;
+            return leader;
+        }
     }
 
-    // All-bot group: the driver must be the same character everyone's master already points at,
+    // All-bot group (or the leader-flag holder is absent from this instance, per above): the
+    // driver must be the same character everyone's master already points at,
     // i.e. the first tank in group order that FindNewMaster()'s tier-3 fallback picks - not the
     // leader-flag holder, who may be a different member and would otherwise stride off alone
     // while the group stays glued to the tank.

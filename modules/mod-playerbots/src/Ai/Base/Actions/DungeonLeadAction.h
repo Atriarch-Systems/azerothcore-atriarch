@@ -28,6 +28,17 @@ public:
 private:
     Creature* FindNearestAliveBoss() const;
     bool PartyReady() const;
+    bool PartyReadyOrStallTimedOut();
+
+    // Stall-timeout bookkeeping (AiPlayerbot.DungeonLeadStallTimeoutSeconds): one action object
+    // exists per bot for the lifetime of its AiObjectContext, so these members persist across
+    // trigger fires. notReadySince is the getMSTime() at which PartyReady() first went false
+    // (0 while ready); the map/instance pair records where that was observed so a new instance
+    // starts with a clean slate.
+    uint32 notReadySince = 0;
+    uint32 notReadyMapId = 0;
+    uint32 notReadyInstanceId = 0;
+    bool stallOverride = false;
 };
 
 #endif

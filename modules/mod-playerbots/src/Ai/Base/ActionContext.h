@@ -40,6 +40,7 @@
 #include "ImbueAction.h"
 #include "InviteToGroupAction.h"
 #include "LeaveGroupAction.h"
+#include "LfgDungeonCompleteAction.h"
 #include "LfgLeaderAnnounceAction.h"
 #include "LootAction.h"
 #include "LootRollAction.h"
@@ -134,6 +135,7 @@ public:
         creators["auto auction buy"] = &ActionContext::auto_auction_buy;
         creators["auto vendor sell"] = &ActionContext::auto_vendor_sell;
         creators["lfg leader announce"] = &ActionContext::lfg_leader_announce;
+        creators["lfg dungeon complete"] = &ActionContext::lfg_dungeon_complete;
         creators["add loot"] = &ActionContext::add_loot;
         creators["add gathering loot"] = &ActionContext::add_gathering_loot;
         creators["add all loot"] = &ActionContext::add_all_loot;
@@ -368,6 +370,7 @@ private:
     static Action* auto_auction_buy(PlayerbotAI* botAI) { return new AuctionBuyAction(botAI); }
     static Action* auto_vendor_sell(PlayerbotAI* botAI) { return new AutoVendorSellAction(botAI); }
     static Action* lfg_leader_announce(PlayerbotAI* botAI) { return new LfgLeaderAnnounceAction(botAI); }
+    static Action* lfg_dungeon_complete(PlayerbotAI* botAI) { return new LfgDungeonCompleteAction(botAI); }
     static Action* release_loot(PlayerbotAI* botAI) { return new ReleaseLootAction(botAI); }
     static Action* dps_assist(PlayerbotAI* botAI) { return new DpsAssistAction(botAI); }
     static Action* dps_aoe(PlayerbotAI* botAI) { return new DpsAoeAction(botAI); }

@@ -6,6 +6,7 @@
 
 #include "DungeonLeadAction.h"
 
+#include "Config.h"
 #include "Creature.h"
 #include "CreatureData.h"
 #include "Event.h"
@@ -14,6 +15,7 @@
 #include "Map.h"
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
+#include "Timer.h"
 
 bool DungeonLeadMoveAction::isUseful()
 {
@@ -23,7 +25,51 @@ bool DungeonLeadMoveAction::isUseful()
     if (bot->IsInCombat() || !bot->IsAlive())
         return false;
 
-    return PartyReady();
+    return PartyReadyOrStallTimedOut();
+}
+
+// PartyReady() with a ceiling on how long it may say no: pause normally, but never forever. A
+// member wedged in unreachable terrain, an eternally-drinking bot, or a ghost that can't find its
+// corpse used to stall the run for good. Once PartyReady() has been continuously false for
+// DungeonLeadStallTimeoutSeconds the gate is overridden - and STAYS overridden (no flapping at
+// the boundary) - until the party becomes genuinely ready again, which re-arms the timer.
+bool DungeonLeadMoveAction::PartyReadyOrStallTimedOut()
+{
+    if (PartyReady())
+    {
+        notReadySince = 0;
+        stallOverride = false;
+        return true;
+    }
+
+    // 0 = never override, i.e. the pre-timeout wait-forever behavior. Inline config read cached
+    // in a function-local static, same convention as the other recent keys (EconomyTriggers.cpp).
+    static uint32 const stallTimeoutSeconds =
+        sConfigMgr->GetOption<uint32>("AiPlayerbot.DungeonLeadStallTimeoutSeconds", 120);
+    if (!stallTimeoutSeconds)
+        return false;
+
+    // First not-ready observation, or a stale one from a previous run: start the clock here.
+    if (!notReadySince || notReadyMapId != bot->GetMapId() || notReadyInstanceId != bot->GetInstanceId())
+    {
+        notReadySince = getMSTime();
+        notReadyMapId = bot->GetMapId();
+        notReadyInstanceId = bot->GetInstanceId();
+        stallOverride = false;
+        return false;
+    }
+
+    if (!stallOverride && GetMSTimeDiffToNow(notReadySince) > stallTimeoutSeconds * 1000)
+    {
+        stallOverride = true;
+        LOG_DEBUG("playerbots",
+            "Bot {} <{}>: party not ready for over {}s in map {} instance {} - stall timeout "
+            "overriding the readiness gate, driving on",
+            bot->GetGUID().ToString(), bot->GetName(), stallTimeoutSeconds, bot->GetMapId(),
+            bot->GetInstanceId());
+    }
+
+    return stallOverride;
 }
 
 // Pause the drive - without giving the action up entirely - while the party isn't in a state to

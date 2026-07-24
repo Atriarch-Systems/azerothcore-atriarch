@@ -6,6 +6,7 @@
 
 #include "LfgTriggers.h"
 
+#include "LFGMgr.h"
 #include "Playerbots.h"
 
 bool LfgProposalActiveTrigger::IsActive() { return AI_VALUE(uint32, "lfg proposal"); }
@@ -46,4 +47,20 @@ bool LfgLeaderAnnounceTrigger::IsActive()
     // is "a real player is present" in the useful sense - the once-per-group+instance gate is the
     // action's job (see LfgLeaderAnnounceAction.h).
     return !botAI->GetRealPlayersInGroup().empty();
+}
+
+bool LfgDungeonCompleteTrigger::IsActive()
+{
+    Group* group = bot->GetGroup();
+    if (!group)
+        return false;
+
+    Map* map = bot->GetMap();
+    if (!map || !map->IsDungeon())
+        return false;
+
+    // GROUP guid on purpose: LFGMgr::FinishDungeon() flips the group's state the moment the final
+    // encounter completes, while the per-player state only follows for members it could reward -
+    // same query the LfgTeleportAction exit-mirror guard already relies on.
+    return sLFGMgr->GetState(group->GetGUID()) == lfg::LFG_STATE_FINISHED_DUNGEON;
 }

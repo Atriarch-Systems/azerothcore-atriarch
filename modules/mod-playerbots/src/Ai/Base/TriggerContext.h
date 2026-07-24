@@ -173,6 +173,7 @@ public:
         creators["unknown dungeon"] = &TriggerContext::unknown_dungeon;
         creators["lfg latecomer"] = &TriggerContext::lfg_latecomer;
         creators["lfg leader announce"] = &TriggerContext::lfg_leader_announce;
+        creators["lfg dungeon complete"] = &TriggerContext::lfg_dungeon_complete;
         creators["dungeon lead navigation"] = &TriggerContext::dungeon_lead_navigation;
 
         creators["random bot update"] = &TriggerContext::random_bot_update_trigger;
@@ -275,6 +276,7 @@ private:
     static Trigger* unknown_dungeon(PlayerbotAI* botAI) { return new UnknownDungeonTrigger(botAI); }
     static Trigger* lfg_latecomer(PlayerbotAI* botAI) { return new LfgLatecomerTrigger(botAI); }
     static Trigger* lfg_leader_announce(PlayerbotAI* botAI) { return new LfgLeaderAnnounceTrigger(botAI); }
+    static Trigger* lfg_dungeon_complete(PlayerbotAI* botAI) { return new LfgDungeonCompleteTrigger(botAI); }
     static Trigger* dungeon_lead_navigation(PlayerbotAI* botAI) { return new DungeonLeadNavigationTrigger(botAI); }
     static Trigger* invalid_target(PlayerbotAI* botAI) { return new InvalidTargetTrigger(botAI); }
     static Trigger* critical_aoe_heal(PlayerbotAI* botAI)
