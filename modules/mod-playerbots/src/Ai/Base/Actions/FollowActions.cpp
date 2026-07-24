@@ -102,6 +102,14 @@ bool FollowAction::Execute(Event /*event*/)
     Formation* formation = AI_VALUE(Formation*, "formation");
     std::string const target = formation->GetTargetName();
 
+    // Dungeon progression driver followers track the driver, not the master-anchored formation -
+    // see the matching block in isUseful() for the full rationale. Checked before the transport
+    // handling below because that block is master-centric and instances have no moving
+    // transports anyway.
+    Player* driver = botAI->GetDungeonNavigationLeader();
+    if (driver && driver != bot)
+        return Follow(driver);
+
     // Transport handling for moving transports only (boats/zeppelins).
     Player* master = botAI->GetMaster();
     if (master && master->IsInWorld() && bot->IsInWorld() && bot->GetMapId() == master->GetMapId())
@@ -247,21 +255,34 @@ bool FollowAction::isUseful()
         botAI->HasStrategy("move from group", BOT_STATE_NON_COMBAT))
         return false;
 
-    // The dungeon progression driver must not also follow its master: with a real player in the
-    // group, FindNewMaster() makes that player everyone's master INCLUDING the driver's, and
-    // follow - a default action queued every idle tick - would drag the driver back toward the
-    // player it is supposed to be leading between "dungeon lead move" firings
-    // (docs/dungeon-progression-driver.md). GetDungeonNavigationLeader() short-circuits on
-    // group/dungeon membership, so bots outside instances pay two pointer checks here.
-    if (botAI->GetDungeonNavigationLeader() == bot)
-        return false;
-
     if (bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL) != nullptr)
         return false;
 
     Formation* formation = AI_VALUE(Formation*, "formation");
     if (!formation)
         return false;
+
+    // Dungeon progression driver (docs/dungeon-progression-driver.md): the driver itself never
+    // follows - with a real player in the group, FindNewMaster() makes that player everyone's
+    // master INCLUDING the driver's, and follow (a default action queued every idle tick) would
+    // drag her back toward the player she is supposed to be leading between "dungeon lead move"
+    // firings. Her FOLLOWERS anchor on the DRIVER instead of the master-anchored formation:
+    // otherwise an idle real player pins the party in place while the leader walks into pulls
+    // alone, which is exactly the tank-dies-solo failure this exists to prevent. The run still
+    // waits for the player - the driver's party-gap gate pauses the drive when ANY member,
+    // the player included, falls behind. GetDungeonNavigationLeader() short-circuits on
+    // group/dungeon membership, so bots outside instances pay two pointer checks here.
+    if (Player* driver = botAI->GetDungeonNavigationLeader())
+    {
+        if (driver == bot)
+            return false;
+
+        if (driver->HasUnitState(UNIT_STATE_IN_FLIGHT) || !CanDeadFollow(driver))
+            return false;
+
+        return ServerFacade::instance().IsDistanceGreaterThan(bot->GetDistance(driver),
+                                                              formation->GetMaxDistance());
+    }
 
     std::string const target = formation->GetTargetName();
 

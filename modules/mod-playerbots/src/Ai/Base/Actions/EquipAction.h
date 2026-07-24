@@ -28,6 +28,13 @@ private:
     void EquipItem(FindItemVisitor* visitor);
     uint8 GetSmallestBagSlot();
     void EquipItem(Item* item);
+
+    // Post-equip verification + honest status whisper. The equip opcodes report failure only via
+    // SendEquipError packets a headless bot session never reads, so the old unconditional
+    // "Equipping X" message lied whenever the swap silently failed (most commonly
+    // EQUIP_ERR_NOT_IN_COMBAT: armor cannot be equipped mid-fight, and loot-roll wins arrive mid-
+    // dungeon-pull). Checks whether dstSlot now actually holds the item and phrases accordingly.
+    void TellEquipResult(Item* item, uint8 dstSlot, char const* suffix = nullptr);
 };
 
 class EquipUpgradesPacketAction : public EquipAction

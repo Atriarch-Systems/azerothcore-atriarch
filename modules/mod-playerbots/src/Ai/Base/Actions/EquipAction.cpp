@@ -93,7 +93,8 @@ void EquipAction::EquipItem(Item* item)
             uint16 src = ((bagIndex << 8) | slot);
             uint16 dst = ((INVENTORY_SLOT_BAG_0 << 8) | newBagSlot);
             bot->SwapItem(src, dst);
-            equippedBag = true;
+            TellEquipResult(item, newBagSlot);
+            return;
         }
     }
 
@@ -112,9 +113,7 @@ void EquipAction::EquipItem(Item* item)
             nicePacket.Read();
             bot->GetSession()->HandleAutoEquipItemSlotOpcode(nicePacket);
 
-            std::ostringstream out;
-            out << "Equipping " << chat->FormatItem(itemProto) << " in ranged slot";
-            botAI->TellMaster(out);
+            TellEquipResult(item, EQUIPMENT_SLOT_RANGED, " in ranged slot");
             return;
         }
 
@@ -229,9 +228,7 @@ void EquipAction::EquipItem(Item* item)
                     botAI->TellMaster(moveMsg);
                 }
 
-                std::ostringstream out;
-                out << "Equipping " << chat->FormatItem(itemProto) << " in main hand";
-                botAI->TellMaster(out);
+                TellEquipResult(item, EQUIPMENT_SLOT_MAINHAND, " in main hand");
                 return;
             }
 
@@ -246,9 +243,7 @@ void EquipAction::EquipItem(Item* item)
                 nicePacket.Read();
                 bot->GetSession()->HandleAutoEquipItemSlotOpcode(nicePacket);
 
-                std::ostringstream out;
-                out << "Equipping " << chat->FormatItem(itemProto) << " in offhand";
-                botAI->TellMaster(out);
+                TellEquipResult(item, EQUIPMENT_SLOT_OFFHAND, " in offhand");
                 return;
             }
             else
@@ -324,10 +319,36 @@ void EquipAction::EquipItem(Item* item)
             nicePacket.Read();
             bot->GetSession()->HandleAutoEquipItemSlotOpcode(nicePacket);
         }
+
+        TellEquipResult(item, dstSlot);
     }
+}
+
+void EquipAction::TellEquipResult(Item* item, uint8 dstSlot, char const* suffix)
+{
+    ItemTemplate const* itemProto = item->GetTemplate();
+
+    // The swap either moved this exact item into dstSlot or left everything untouched - the
+    // opcodes report failure only through SendEquipError packets nothing reads on a headless
+    // session (live incident 2026-07-22: a roll-won ring "Equipping" whisper while the equip had
+    // been rejected with EQUIP_ERR_NOT_IN_COMBAT, since armor cannot be equipped mid-fight).
+    // GetItemByPos bounds-checks, so an invalid dstSlot (e.g. NULL_SLOT from a failed
+    // FindEquipSlot) safely reads as "not equipped".
+    Item* equipped = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, dstSlot);
+    bool success = equipped && equipped->GetGUID() == item->GetGUID();
 
     std::ostringstream out;
-    out << "Equipping " << chat->FormatItem(itemProto);
+    if (success)
+    {
+        out << "Equipping " << chat->FormatItem(itemProto);
+        if (suffix)
+            out << suffix;
+    }
+    else if (bot->IsInCombat())
+        out << "I'll equip " << chat->FormatItem(itemProto) << " after the fight";
+    else
+        out << "I couldn't equip " << chat->FormatItem(itemProto);
+
     botAI->TellMaster(out);
 }
 
