@@ -856,8 +856,12 @@ AiPlayerbot.EconomyRealSinks = 0
 
 # Per-level cash-on-hand targets (docs/bot-economy.md Phase 6): 10s@1, 50s@10,
 # 1g@20, 3g@30, 5g@40, 10g@50, 15g@60, 50g@70, 100g@80, linearly interpolated.
-# Drives gold seeding, spending reserves (autonomous purchases never dip a bot
-# below target), and the earn-gold behavioral drive.
+# The target is WORKING CAPITAL: it drives gold seeding and the earn-gold
+# behavioral drive. Essentials (repair/ammo/spells/travel/consumables) may
+# spend all the way down - a bot with coin never refuses a needed action;
+# only discretionary purchases (gear/tradeskill AH buys) keep a floor at
+# WealthEarnBelowPct of target, so shopping can't itself push a bot into
+# earn-gold territory but real needs can, after which it grinds back up.
 # Default: 1 (enabled)
 AiPlayerbot.WealthTargets = 1
 

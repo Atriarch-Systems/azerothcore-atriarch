@@ -231,17 +231,36 @@ uint32 FreeMoneyForValue::Calculate()
     if (botAI->HasActivePlayerMaster())
         return money;
 
-    // Phase 6b (bot economy, AiPlayerbot.WealthTargets): random bots protect their per-level
-    // wealth target - autonomous spending can never take them below it.
+    // Phase 6b (bot economy, AiPlayerbot.WealthTargets): the per-level target is WORKING
+    // CAPITAL, not a locked vault (user intent 2026-07-24: "the point of the gold is so the
+    // bot CAN repair or buy things"). Essentials - repair, ammo, spells, travel, consumables -
+    // may spend all the way down (their own priority reserves below still apply), because a
+    // bot that has coin but refuses to repair is exactly the "no gold but need to act" failure
+    // this system exists to prevent. Only DISCRETIONARY purchases (gear, tradeskill, guild,
+    // anything) keep a floor, and only at the earn-mode threshold (WealthEarnBelowPct of
+    // target) rather than the full target - so an AH shopping spree can never itself push the
+    // bot into earn-gold territory, while repairs/training legitimately can, after which the
+    // earn drive grinds the buffer back up.
     static bool const wealthTargets =
         sConfigMgr->GetOption<bool>("AiPlayerbot.WealthTargets", true);
     if (wealthTargets && sRandomPlayerbotMgr.IsRandomBot(bot))
     {
-        uint32 const moneyTarget = PlayerbotFactory::MoneyTargetForLevel(bot->GetLevel());
-        if (moneyTarget > money)
-            return 0;
+        NeedMoneyFor const qualifierNeed = NeedMoneyFor(stoi(getQualifier()));
+        bool const discretionary = qualifierNeed == NeedMoneyFor::gear ||
+                                   qualifierNeed == NeedMoneyFor::tradeskill ||
+                                   qualifierNeed == NeedMoneyFor::guild ||
+                                   qualifierNeed == NeedMoneyFor::anything;
+        if (discretionary)
+        {
+            static uint32 const earnBelowPct =
+                sConfigMgr->GetOption<uint32>("AiPlayerbot.WealthEarnBelowPct", 70);
+            uint32 const moneyFloor =
+                PlayerbotFactory::MoneyTargetForLevel(bot->GetLevel()) * earnBelowPct / 100;
+            if (moneyFloor > money)
+                return 0;
 
-        money -= moneyTarget;
+            money -= moneyFloor;
+        }
     }
 
     uint32 savedMoney = AI_VALUE2(uint32, "total money needed for", getQualifier()) -
