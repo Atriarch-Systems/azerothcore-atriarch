@@ -12,6 +12,7 @@
 #include "HealthTriggers.h"
 #include "RangeTriggers.h"
 #include "Trigger.h"
+#include "TriggerInterval.h"
 #include "Player.h"
 
 class PlayerbotAI;
@@ -277,7 +278,7 @@ private:
 class NoFoodTrigger : public Trigger
 {
 public:
-    NoFoodTrigger(PlayerbotAI* botAI) : Trigger(botAI, "no food trigger") {}
+    NoFoodTrigger(PlayerbotAI* botAI) : Trigger(botAI, "no food trigger", RelaxedTriggerInterval(5)) {}
 
     bool IsActive() override;
 };
@@ -285,7 +286,7 @@ public:
 class NoDrinkTrigger : public Trigger
 {
 public:
-    NoDrinkTrigger(PlayerbotAI* botAI) : Trigger(botAI, "no drink trigger") {}
+    NoDrinkTrigger(PlayerbotAI* botAI) : Trigger(botAI, "no drink trigger", RelaxedTriggerInterval(5)) {}
 
     bool IsActive() override;
 };
@@ -772,7 +773,7 @@ public:
 class IsSwimmingTrigger : public Trigger
 {
 public:
-    IsSwimmingTrigger(PlayerbotAI* botAI) : Trigger(botAI, "swimming") {}
+    IsSwimmingTrigger(PlayerbotAI* botAI) : Trigger(botAI, "swimming", RelaxedTriggerInterval(2)) {}
 
     bool IsActive() override;
 };
@@ -905,7 +906,7 @@ public:
 class IsMountedTrigger : public Trigger
 {
 public:
-    IsMountedTrigger(PlayerbotAI* botAI) : Trigger(botAI, "mounted", 1) {}
+    IsMountedTrigger(PlayerbotAI* botAI) : Trigger(botAI, "mounted", RelaxedTriggerInterval(2)) {}
 
     bool IsActive() override;
 };
@@ -955,7 +956,7 @@ public:
 class SelfResurrectTrigger : public Trigger
 {
 public:
-    SelfResurrectTrigger(PlayerbotAI* botAI) : Trigger(botAI, "can self resurrect") {}
+    SelfResurrectTrigger(PlayerbotAI* botAI) : Trigger(botAI, "can self resurrect", RelaxedTriggerInterval(5)) {}
 
     bool IsActive() override { return !bot->IsAlive() && bot->GetUInt32Value(PLAYER_SELF_RES_SPELL); }
 };

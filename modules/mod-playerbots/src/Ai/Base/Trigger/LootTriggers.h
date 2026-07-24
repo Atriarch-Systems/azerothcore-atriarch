@@ -8,13 +8,14 @@
 #define PLAYERBOTS_LOOTTRIGGERS_H
 
 #include "Trigger.h"
+#include "TriggerInterval.h"
 
 class PlayerbotAI;
 
 class LootAvailableTrigger : public Trigger
 {
 public:
-    LootAvailableTrigger(PlayerbotAI* botAI) : Trigger(botAI, "loot available") {}
+    LootAvailableTrigger(PlayerbotAI* botAI) : Trigger(botAI, "loot available", RelaxedTriggerInterval(1000)) {}
 
     bool IsActive() override;
 };
@@ -22,7 +23,7 @@ public:
 class FarFromCurrentLootTrigger : public Trigger
 {
 public:
-    FarFromCurrentLootTrigger(PlayerbotAI* botAI) : Trigger(botAI, "far from current loot") {}
+    FarFromCurrentLootTrigger(PlayerbotAI* botAI) : Trigger(botAI, "far from current loot", RelaxedTriggerInterval(1000)) {}
 
     bool IsActive() override;
 };

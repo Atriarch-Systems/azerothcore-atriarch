@@ -237,10 +237,15 @@ void PlayerbotHolder::HandlePlayerBotLoginCallback(PlayerbotLoginQueryHolder con
     PlayerbotHolder::botLoading.erase(holder.GetGuid());
 }
 
-void PlayerbotHolder::UpdateSessions()
+void PlayerbotHolder::UpdateSessions(uint32 shards, uint32 shardIndex)
 {
+    uint32 botIndex = 0;
     for (PlayerBotMap::const_iterator itr = GetPlayerBotsBegin(); itr != GetPlayerBotsEnd(); ++itr)
     {
+        // Round-robin sharding (shards <= 1 short-circuits to the walk-everything behavior).
+        if (shards > 1 && (botIndex++ % shards) != shardIndex)
+            continue;
+
         Player* const bot = itr->second;
         if (bot->IsBeingTeleported())
         {

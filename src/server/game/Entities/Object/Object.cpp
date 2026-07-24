@@ -3102,6 +3102,10 @@ void WorldObject::BuildUpdate(UpdateDataMapType& data_map)
     // Build update for visible players
     DoForAllVisiblePlayers([this, &data_map](Player* player)
     {
+        // Skip players whose update data would be discarded anyway (e.g. playerbots, see Map::SendObjectUpdates)
+        if (!sScriptMgr->OnPlayerbotCheckUpdatesToSend(player))
+            return;
+
         BuildFieldsUpdate(player, data_map);
     });
 

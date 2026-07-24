@@ -9,6 +9,7 @@
 
 #include "NearestUnitsValue.h"
 #include "PlayerbotAIConfig.h"
+#include "TriggerInterval.h"
 
 class PlayerbotAI;
 
@@ -16,7 +17,7 @@ class NearestNpcsValue : public NearestUnitsValue
 {
 public:
     NearestNpcsValue(PlayerbotAI* botAI, float range = sPlayerbotAIConfig.sightDistance)
-        : NearestUnitsValue(botAI, "nearest npcs", range)
+        : NearestUnitsValue(botAI, "nearest npcs", range, false, RelaxedTriggerInterval(1000))
     {
     }
 

@@ -19,6 +19,9 @@
 #include <nlohmann/json.hpp>
 #include <thread>
 #include <algorithm>
+#include <deque>
+#include <functional>
+#include <mutex>
 #include <random>
 #include <cctype>
 #include <chrono>
@@ -55,6 +58,50 @@
 static bool IsBotEligibleForChatChannelLocal(Player* bot, Player* player,
                                              ChatChannelSourceLocal source, Channel* channel = nullptr, Player* receiver = nullptr);
 static std::string GenerateBotPrompt(Player* bot, std::string playerMessage, Player* player);
+
+// -----------------------------------------------------------------------------
+// Deferred world-thread delivery queue.
+//
+// LLM HTTP calls run on detached worker threads, but game-object mutation
+// (Say/Yell/whisper/channel/guild chat etc.) is only safe on the world thread.
+// Workers therefore push a delivery closure - capturing GUIDs and strings only,
+// never raw Player* pointers - and OllamaBotRandomChatter::OnUpdate drains the
+// queue each world tick, re-resolving players by GUID before speaking.
+// -----------------------------------------------------------------------------
+namespace
+{
+    std::mutex g_botChatDeliveryMutex;
+    std::deque<std::function<void()>> g_botChatDeliveries;
+}
+
+void QueueBotChatDelivery(std::function<void()> delivery)
+{
+    std::lock_guard<std::mutex> lock(g_botChatDeliveryMutex);
+    g_botChatDeliveries.push_back(std::move(delivery));
+}
+
+void DrainBotChatDeliveries()
+{
+    // Swap under the lock, run the deliveries outside it: the mutex is only
+    // ever held for queue ops, never while speaking or during HTTP.
+    std::deque<std::function<void()>> pending;
+    {
+        std::lock_guard<std::mutex> lock(g_botChatDeliveryMutex);
+        pending.swap(g_botChatDeliveries);
+    }
+
+    for (auto const& delivery : pending)
+    {
+        try
+        {
+            delivery();
+        }
+        catch (std::exception const& e)
+        {
+            LOG_ERROR("server.loading", "[Ollama Chat] Exception delivering deferred bot chat: {}", e.what());
+        }
+    }
+}
 
 // Helper function to format class name for any player
 static std::string FormatPlayerClass(uint8_t classId)
@@ -1447,6 +1494,7 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t /*type*/, uint32
         
         std::thread([botGuid, senderGuid, prompt, sourceLocal, channelId = (channel ? channel->GetChannelId() : 0), channelName = (channel ? channel->GetName() : ""), msg]() {
             try {
+                // Worker thread: touch only strings here, never Player*/game objects.
                 // Use the QueryManager to submit the query.
                 auto responseFuture = SubmitQuery(prompt);
                 if (!responseFuture.valid())
@@ -1454,248 +1502,244 @@ void PlayerBotChatHandler::ProcessChat(Player* player, uint32_t /*type*/, uint32
                     return;
                 }
                 std::string response = responseFuture.get();
-
-                // Reacquire pointers by GUID.
-                Player* botPtr = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
-                Player* senderPtr = ObjectAccessor::FindPlayer(ObjectGuid(senderGuid));
-                if (!botPtr)
-                {
-                    if(g_DebugEnabled)
-                    {
-                        LOG_ERROR("server.loading", "[Ollama Chat] Failed to reacquire bot from GUID {}", botGuid);
-                    }
-                    return;
-                }
-                if (!senderPtr)
-                {
-                    if(g_DebugEnabled)
-                    {
-                        LOG_ERROR("server.loading", "[Ollama Chat] Failed to reacquire sender from GUID {}", senderGuid);
-                    }
-                    return;
-                }
                 if (response.empty())
                 {
                     if(g_DebugEnabled)
                     {
-                        LOG_INFO("server.loading", "[OllamaChat] Bot {} skipped reply due to API error", botPtr->GetName());
-                    }
-                    return;
-                }
-                PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(botPtr);
-                if (!botAI)
-                {
-                    if(g_DebugEnabled)
-                    {
-                        LOG_ERROR("server.loading", "[Ollama Chat] No PlayerbotAI found for bot {}", botPtr->GetName());
+                        LOG_INFO("server.loading", "[OllamaChat] Bot {} skipped reply due to API error", botGuid);
                     }
                     return;
                 }
 
-                // Seeker journey memory: if the original speaker is the seeker,
-                // journal what this bot told her (docs/seeker-selenwe.md).
-                RecordSeekerConversation(senderPtr, botPtr, response);
-                
                 // Simulate typing delay if enabled
                 if (g_EnableTypingSimulation)
                 {
                     uint32_t delay = g_TypingSimulationBaseDelay + (response.length() * g_TypingSimulationDelayPerChar);
                     if (g_DebugEnabled)
-                        LOG_INFO("server.loading", "[OllamaChat] Bot {} simulating typing delay: {}ms for {} characters", 
-                                 botPtr->GetName(), delay, response.length());
+                        LOG_INFO("server.loading", "[OllamaChat] Bot {} simulating typing delay: {}ms for {} characters", botGuid, delay, response.length());
                     std::this_thread::sleep_for(std::chrono::milliseconds(delay));
-                    
-                    // Reacquire pointers after delay
-                    botPtr = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
-                    if (!botPtr) return;
-                    botAI = PlayerbotsMgr::instance().GetPlayerbotAI(botPtr);
-                    if (!botAI) return;
-                    senderPtr = ObjectAccessor::FindPlayer(ObjectGuid(senderGuid));
-                    if (!senderPtr) return;
                 }
-                
-                // Route the response.
-                if (channelId != 0 && !channelName.empty())
+
+                // Marshal delivery onto the world thread (drained in
+                // OllamaBotRandomChatter::OnUpdate); re-resolve both players by
+                // GUID there - either may log out during the LLM round trip.
+                QueueBotChatDelivery([botGuid, senderGuid, sourceLocal, channelId, channelName, msg, response]()
                 {
-                    // For channels, get the channel instance for the bot's team
-                    ChannelMgr* cMgr = ChannelMgr::forTeam(botPtr->GetTeamId());
-                    if (cMgr)
+                    Player* botPtr = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
+                    if (!botPtr)
                     {
-                        Channel* targetChannel = cMgr->GetChannel(channelName, botPtr);
-                        if (targetChannel)
+                        if(g_DebugEnabled)
                         {
-                            if(g_DebugEnabled)
-                            {
-                                LOG_INFO("server.loading", "[Ollama Chat] Bot {} found channel '{}' (ID: {}), checking membership...", 
-                                        botPtr->GetName(), channelName, targetChannel->GetChannelId());
-                            }
-                            
-                            if (botPtr->IsInChannel(targetChannel))
+                            LOG_ERROR("server.loading", "[Ollama Chat] Failed to reacquire bot from GUID {}", botGuid);
+                        }
+                        return;
+                    }
+                    Player* senderPtr = ObjectAccessor::FindPlayer(ObjectGuid(senderGuid));
+                    if (!senderPtr)
+                    {
+                        if(g_DebugEnabled)
+                        {
+                            LOG_ERROR("server.loading", "[Ollama Chat] Failed to reacquire sender from GUID {}", senderGuid);
+                        }
+                        return;
+                    }
+                    PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(botPtr);
+                    if (!botAI)
+                    {
+                        if(g_DebugEnabled)
+                        {
+                            LOG_ERROR("server.loading", "[Ollama Chat] No PlayerbotAI found for bot {}", botPtr->GetName());
+                        }
+                        return;
+                    }
+
+                    // Seeker journey memory: if the original speaker is the seeker,
+                    // journal what this bot told her (docs/seeker-selenwe.md).
+                    RecordSeekerConversation(senderPtr, botPtr, response);
+
+                    // Route the response.
+                    if (channelId != 0 && !channelName.empty())
+                    {
+                        // For channels, get the channel instance for the bot's team
+                        ChannelMgr* cMgr = ChannelMgr::forTeam(botPtr->GetTeamId());
+                        if (cMgr)
+                        {
+                            Channel* targetChannel = cMgr->GetChannel(channelName, botPtr);
+                            if (targetChannel)
                             {
                                 if(g_DebugEnabled)
                                 {
-                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} is confirmed in channel '{}', sending message...", 
-                                            botPtr->GetName(), channelName);
+                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} found channel '{}' (ID: {}), checking membership...", 
+                                            botPtr->GetName(), channelName, targetChannel->GetChannelId());
                                 }
-                                targetChannel->Say(botPtr->GetGUID(), response, LANG_UNIVERSAL);
-                                ProcessBotChatMessage(botPtr, response, SRC_GENERAL_LOCAL, targetChannel);
-                                if(g_DebugEnabled)
+                            
+                                if (botPtr->IsInChannel(targetChannel))
                                 {
-                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} responded in channel {}: {}", 
-                                            botPtr->GetName(), channelName, response);
+                                    if(g_DebugEnabled)
+                                    {
+                                        LOG_INFO("server.loading", "[Ollama Chat] Bot {} is confirmed in channel '{}', sending message...", 
+                                                botPtr->GetName(), channelName);
+                                    }
+                                    targetChannel->Say(botPtr->GetGUID(), response, LANG_UNIVERSAL);
+                                    ProcessBotChatMessage(botPtr, response, SRC_GENERAL_LOCAL, targetChannel);
+                                    if(g_DebugEnabled)
+                                    {
+                                        LOG_INFO("server.loading", "[Ollama Chat] Bot {} responded in channel {}: {}", 
+                                                botPtr->GetName(), channelName, response);
+                                    }
+                                }
+                                else
+                                {
+                                    if(g_DebugEnabled)
+                                    {
+                                        LOG_ERROR("server.loading", "[Ollama Chat] Bot {} NOT in channel '{}' according to IsInChannel check - skipping reply", 
+                                                    botPtr->GetName(), channelName);
+                                    }
+                                    // Don't fallback to Say - if bot isn't in the channel, don't reply at all
                                 }
                             }
                             else
                             {
                                 if(g_DebugEnabled)
                                 {
-                                    LOG_ERROR("server.loading", "[Ollama Chat] Bot {} NOT in channel '{}' according to IsInChannel check - skipping reply", 
-                                                botPtr->GetName(), channelName);
+                                    LOG_ERROR("server.loading", "[Ollama Chat] Bot {} cannot find channel '{}' (ID: {}) for team {} - skipping reply", 
+                                             botPtr->GetName(), channelName, channelId, (int)botPtr->GetTeamId());
                                 }
-                                // Don't fallback to Say - if bot isn't in the channel, don't reply at all
+                                // Don't fallback to Say - if channel doesn't exist, don't reply at all
                             }
                         }
-                        else
+                    }
+                    else
+                    {
+                        switch (sourceLocal)
                         {
-                            if(g_DebugEnabled)
-                            {
-                                LOG_ERROR("server.loading", "[Ollama Chat] Bot {} cannot find channel '{}' (ID: {}) for team {} - skipping reply", 
-                                         botPtr->GetName(), channelName, channelId, (int)botPtr->GetTeamId());
-                            }
-                            // Don't fallback to Say - if channel doesn't exist, don't reply at all
+                            case SRC_GUILD_LOCAL: 
+                                botAI->SayToGuild(response);
+                                ProcessBotChatMessage(botPtr, response, SRC_GUILD_LOCAL, nullptr);
+                                break;
+                            case SRC_OFFICER_LOCAL: 
+                                botAI->SayToGuild(response);
+                                ProcessBotChatMessage(botPtr, response, SRC_OFFICER_LOCAL, nullptr);
+                                break;
+                            case SRC_PARTY_LOCAL: 
+                                botAI->SayToParty(response);
+                                ProcessBotChatMessage(botPtr, response, SRC_PARTY_LOCAL, nullptr);
+                                break;
+                            case SRC_RAID_LOCAL:  
+                                botAI->SayToRaid(response);
+                                ProcessBotChatMessage(botPtr, response, SRC_RAID_LOCAL, nullptr);
+                                break;
+                            case SRC_SAY_LOCAL:
+                                // Only send Say if someone (real player or bot) is within say distance
+                                {
+                                    bool someoneCanHear = false;
+                                    if (botPtr->IsInWorld())
+                                    {
+                                        for (auto const& pair : ObjectAccessor::GetPlayers())
+                                        {
+                                            Player* nearbyPlayer = pair.second;
+                                            if (nearbyPlayer && nearbyPlayer != botPtr && nearbyPlayer->IsInWorld())
+                                            {
+                                                if (botPtr->GetDistance(nearbyPlayer) <= g_SayDistance)
+                                                {
+                                                    someoneCanHear = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                
+                                    if (someoneCanHear)
+                                    {
+                                        botAI->Say(response);
+                                        ProcessBotChatMessage(botPtr, response, SRC_SAY_LOCAL, nullptr);
+                                    }
+                                    else if (g_DebugEnabled)
+                                    {
+                                        LOG_INFO("server.loading", "[Ollama Chat] Bot {} skipping Say reply - no one within {} yards to hear it", 
+                                                botPtr->GetName(), g_SayDistance);
+                                    }
+                                }
+                                break;
+                            case SRC_YELL_LOCAL:
+                                // Only send Yell if someone is within yell distance
+                                {
+                                    bool someoneCanHear = false;
+                                    if (botPtr->IsInWorld())
+                                    {
+                                        for (auto const& pair : ObjectAccessor::GetPlayers())
+                                        {
+                                            Player* nearbyPlayer = pair.second;
+                                            if (nearbyPlayer && nearbyPlayer != botPtr && nearbyPlayer->IsInWorld())
+                                            {
+                                                if (botPtr->GetDistance(nearbyPlayer) <= g_YellDistance)
+                                                {
+                                                    someoneCanHear = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                
+                                    if (someoneCanHear)
+                                    {
+                                        botAI->Yell(response);
+                                        ProcessBotChatMessage(botPtr, response, SRC_YELL_LOCAL, nullptr);
+                                    }
+                                    else if (g_DebugEnabled)
+                                    {
+                                        LOG_INFO("server.loading", "[Ollama Chat] Bot {} skipping Yell reply - no one within {} yards to hear it", 
+                                                botPtr->GetName(), g_YellDistance);
+                                    }
+                                }
+                                break;
+                            case SRC_WHISPER_LOCAL:
+                                // For whispers, find the original sender and whisper back
+                                {
+                                    Player* originalSender = ObjectAccessor::FindPlayer(ObjectGuid(senderGuid));
+                                    if (originalSender)
+                                    {
+                                        if(g_DebugEnabled)
+                                        {
+                                            LOG_INFO("server.loading", "[Ollama Chat] Bot {} whispering response '{}' to {}", 
+                                                    botPtr->GetName(), response, originalSender->GetName());
+                                        }
+                                        botAI->Whisper(response, originalSender->GetName());
+                                        // Don't trigger ProcessBotChatMessage for whispers - they're private
+                                    }
+                                    else if(g_DebugEnabled)
+                                    {
+                                        LOG_ERROR("server.loading", "[Ollama Chat] Cannot whisper response - original sender not found for GUID {}", senderGuid);
+                                    }
+                                }
+                                break;
+                            default:              
+                                botAI->Say(response);
+                                ProcessBotChatMessage(botPtr, response, SRC_SAY_LOCAL, nullptr);
+                                break;
                         }
                     }
-                }
-                else
-                {
-                    switch (sourceLocal)
-                    {
-                        case SRC_GUILD_LOCAL: 
-                            botAI->SayToGuild(response);
-                            ProcessBotChatMessage(botPtr, response, SRC_GUILD_LOCAL, nullptr);
-                            break;
-                        case SRC_OFFICER_LOCAL: 
-                            botAI->SayToGuild(response);
-                            ProcessBotChatMessage(botPtr, response, SRC_OFFICER_LOCAL, nullptr);
-                            break;
-                        case SRC_PARTY_LOCAL: 
-                            botAI->SayToParty(response);
-                            ProcessBotChatMessage(botPtr, response, SRC_PARTY_LOCAL, nullptr);
-                            break;
-                        case SRC_RAID_LOCAL:  
-                            botAI->SayToRaid(response);
-                            ProcessBotChatMessage(botPtr, response, SRC_RAID_LOCAL, nullptr);
-                            break;
-                        case SRC_SAY_LOCAL:
-                            // Only send Say if someone (real player or bot) is within say distance
-                            {
-                                bool someoneCanHear = false;
-                                if (botPtr->IsInWorld())
-                                {
-                                    for (auto const& pair : ObjectAccessor::GetPlayers())
-                                    {
-                                        Player* nearbyPlayer = pair.second;
-                                        if (nearbyPlayer && nearbyPlayer != botPtr && nearbyPlayer->IsInWorld())
-                                        {
-                                            if (botPtr->GetDistance(nearbyPlayer) <= g_SayDistance)
-                                            {
-                                                someoneCanHear = true;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                if (someoneCanHear)
-                                {
-                                    botAI->Say(response);
-                                    ProcessBotChatMessage(botPtr, response, SRC_SAY_LOCAL, nullptr);
-                                }
-                                else if (g_DebugEnabled)
-                                {
-                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} skipping Say reply - no one within {} yards to hear it", 
-                                            botPtr->GetName(), g_SayDistance);
-                                }
-                            }
-                            break;
-                        case SRC_YELL_LOCAL:
-                            // Only send Yell if someone is within yell distance
-                            {
-                                bool someoneCanHear = false;
-                                if (botPtr->IsInWorld())
-                                {
-                                    for (auto const& pair : ObjectAccessor::GetPlayers())
-                                    {
-                                        Player* nearbyPlayer = pair.second;
-                                        if (nearbyPlayer && nearbyPlayer != botPtr && nearbyPlayer->IsInWorld())
-                                        {
-                                            if (botPtr->GetDistance(nearbyPlayer) <= g_YellDistance)
-                                            {
-                                                someoneCanHear = true;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                if (someoneCanHear)
-                                {
-                                    botAI->Yell(response);
-                                    ProcessBotChatMessage(botPtr, response, SRC_YELL_LOCAL, nullptr);
-                                }
-                                else if (g_DebugEnabled)
-                                {
-                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} skipping Yell reply - no one within {} yards to hear it", 
-                                            botPtr->GetName(), g_YellDistance);
-                                }
-                            }
-                            break;
-                        case SRC_WHISPER_LOCAL:
-                            // For whispers, find the original sender and whisper back
-                            {
-                                Player* originalSender = ObjectAccessor::FindPlayer(ObjectGuid(senderGuid));
-                                if (originalSender)
-                                {
-                                    if(g_DebugEnabled)
-                                    {
-                                        LOG_INFO("server.loading", "[Ollama Chat] Bot {} whispering response '{}' to {}", 
-                                                botPtr->GetName(), response, originalSender->GetName());
-                                    }
-                                    botAI->Whisper(response, originalSender->GetName());
-                                    // Don't trigger ProcessBotChatMessage for whispers - they're private
-                                }
-                                else if(g_DebugEnabled)
-                                {
-                                    LOG_ERROR("server.loading", "[Ollama Chat] Cannot whisper response - original sender not found for GUID {}", senderGuid);
-                                }
-                            }
-                            break;
-                        default:              
-                            botAI->Say(response);
-                            ProcessBotChatMessage(botPtr, response, SRC_SAY_LOCAL, nullptr);
-                            break;
-                    }
-                }
                 
-                // Update sentiment based on the player's message
-                UpdateBotPlayerSentiment(botPtr, senderPtr, msg);
+                    // Update sentiment based on the player's message
+                    UpdateBotPlayerSentiment(botPtr, senderPtr, msg);
                 
-                AppendBotConversation(botGuid, senderGuid, msg, response);
-                if (botPtr->IsInWorld() && senderPtr->IsInWorld())
-                {
-                    float respDistance = senderPtr->GetDistance(botPtr);
-                    if(g_DebugEnabled)
+                    AppendBotConversation(botGuid, senderGuid, msg, response);
+                    if (botPtr->IsInWorld() && senderPtr->IsInWorld())
                     {
-                        LOG_INFO("server.loading", "[Ollama Chat] Bot {} (distance: {}) responded: {}", botPtr->GetName(), respDistance, response);
+                        float respDistance = senderPtr->GetDistance(botPtr);
+                        if(g_DebugEnabled)
+                        {
+                            LOG_INFO("server.loading", "[Ollama Chat] Bot {} (distance: {}) responded: {}", botPtr->GetName(), respDistance, response);
+                        }
                     }
-                }
-                else
-                {
-                    if(g_DebugEnabled)
+                    else
                     {
-                        LOG_INFO("server.loading", "[Ollama Chat] Bot {} responded: {} (distance not calculated - players not in world)", botPtr->GetName(), response);
+                        if(g_DebugEnabled)
+                        {
+                            LOG_INFO("server.loading", "[Ollama Chat] Bot {} responded: {} (distance not calculated - players not in world)", botPtr->GetName(), response);
+                        }
                     }
-                }
+                });
             }
             catch (const std::exception& ex)
             {

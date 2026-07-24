@@ -8,6 +8,7 @@
 #define PLAYERBOTS_PVPTRIGGERS_H
 
 #include "Trigger.h"
+#include "TriggerInterval.h"
 
 class PlayerbotAI;
 
@@ -120,7 +121,7 @@ public:
 class PlayerWantsInBattlegroundTrigger : public Trigger
 {
 public:
-    PlayerWantsInBattlegroundTrigger(PlayerbotAI* botAI) : Trigger(botAI, "wants in bg") {}
+    PlayerWantsInBattlegroundTrigger(PlayerbotAI* botAI) : Trigger(botAI, "wants in bg", RelaxedTriggerInterval(10)) {}
 
     bool IsActive() override;
 };

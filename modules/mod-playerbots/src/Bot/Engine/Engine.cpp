@@ -7,6 +7,7 @@
 #include "Engine.h"
 
 #include "Action.h"
+#include "Config.h"
 #include "Event.h"
 #include "PerfMonitor.h"
 #include "Playerbots.h"
@@ -158,6 +159,10 @@ bool Engine::DoNextAction(Unit* /*unit*/, uint32 /*depth*/, bool minimal)
 
     uint32 iterations = 0;
     uint32 iterationsPerTick = queue.Size() * (minimal ? 2 : sPlayerbotAIConfig.iterationsPerTick);
+    // Cap per-tick work regardless of queue size; 0 means no cap
+    static uint32 const maxIterations = sConfigMgr->GetOption<uint32>("AiPlayerbot.MaxIterationsPerTick", 300);
+    if (maxIterations && iterationsPerTick > maxIterations)
+        iterationsPerTick = maxIterations;
 
     while (++iterations <= iterationsPerTick)
     {

@@ -100,6 +100,16 @@ public:
     void LogPlayerLocation();
     void UpdateAIInternal(uint32 elapsed, bool minimal = false) override;
 
+    // Shadows PlayerbotHolder::UpdateSessions() for the every-world-tick, all-random-bots caller
+    // (Playerbots.cpp OnPlayerbotUpdate): round-robin shards the roster across ticks per
+    // AiPlayerbot.UpdateSessionsShards. The per-master PlayerbotMgr path keeps the unsharded base
+    // behavior. Also refreshes the map-population snapshot used by balanced teleports.
+    void UpdateSessions();
+
+    // Thread-safe read of the world-thread-refreshed per-map player-count snapshot
+    // (population-balanced teleports); returns 0 for unknown maps.
+    static uint32 GetSnapshottedMapPopulation(uint32 mapId);
+
     uint32 activeBots = 0;
     static bool HandlePlayerbotConsoleCommand(ChatHandler* handler, char const* args);
     bool IsRandomBot(Player* bot);

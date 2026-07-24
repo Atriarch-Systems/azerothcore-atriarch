@@ -2,6 +2,7 @@
 #define MOD_OLLAMA_CHAT_HANDLER_H
 
 #include "ScriptMgr.h"
+#include <functional>
 #include <string>
 
 enum ChatChannelSourceLocal
@@ -24,6 +25,12 @@ ChatChannelSourceLocal GetChannelSourceLocal(uint32_t type);
 void ProcessBotChatMessage(Player* bot, const std::string& msg, ChatChannelSourceLocal sourceLocal, Channel* channel);
 
 void SaveBotConversationHistoryToDB();
+
+// Deferred world-thread delivery: async LLM workers must never touch
+// Player*/game objects, so they queue a closure (capturing GUIDs and strings
+// only) that OllamaBotRandomChatter::OnUpdate runs on the world thread.
+void QueueBotChatDelivery(std::function<void()> delivery);
+void DrainBotChatDeliveries();
 
 class PlayerBotChatHandler : public PlayerScript
 {

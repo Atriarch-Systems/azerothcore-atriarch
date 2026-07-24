@@ -14,7 +14,9 @@
 #include <cstdlib>
 #include <ctime>
 #include <iomanip>
+#include <mutex>
 #include <random>
+#include <unordered_map>
 
 #include "AiFactory.h"
 #include "Battleground.h"
@@ -45,6 +47,7 @@
 #include "RandomPlayerbotFactory.h"
 #include "ServerFacade.h"
 #include "SharedDefines.h"
+#include "Timer.h"
 #include "TravelMgr.h"
 #include "Unit.h"
 #include "World.h"
@@ -280,6 +283,67 @@ void RandomPlayerbotMgr::LogPlayerLocation()
         // This is to prevent some thread-unsafeness. Crashes would happen if bots get added or removed.
         // We really don't care here. Just skip a log. Making this thread-safe is not worth the effort.
     }
+}
+
+namespace
+{
+// Per-base-map player counts for population-balanced teleports. RandomTeleport is reachable
+// from map-worker threads (level-up maintenance runs as a bot action), where traversing
+// ANOTHER map's player list races that map's own update thread - so the counts are snapshotted
+// here on the world thread (UpdateSessions runs between map-update phases, when no map worker
+// is running) and the teleport path only ever reads the snapshot.
+std::mutex mapPopulationLock;
+std::unordered_map<uint32, uint32> mapPopulationSnapshot;
+
+void RefreshMapPopulationSnapshot()
+{
+    static bool const balanceTeleports =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.PopulationBalancedTeleports", true);
+    if (!balanceTeleports)
+        return;
+
+    static uint32 nextRefresh = 0;
+    uint32 const now = getMSTime();
+    if (now < nextRefresh)
+        return;
+
+    nextRefresh = now + 5000;
+
+    std::unordered_map<uint32, uint32> counts;
+    for (uint32 mapId : sPlayerbotAIConfig.randomBotMaps)
+        if (Map* map = sMapMgr->FindBaseMap(mapId))
+            counts[mapId] = map->GetPlayersCountExceptGMs();
+
+    std::lock_guard<std::mutex> lock(mapPopulationLock);
+    mapPopulationSnapshot = std::move(counts);
+}
+}  // namespace
+
+uint32 RandomPlayerbotMgr::GetSnapshottedMapPopulation(uint32 mapId)
+{
+    std::lock_guard<std::mutex> lock(mapPopulationLock);
+    auto it = mapPopulationSnapshot.find(mapId);
+    return it != mapPopulationSnapshot.end() ? it->second : 0;
+}
+
+void RandomPlayerbotMgr::UpdateSessions()
+{
+    RefreshMapPopulationSnapshot();
+
+    // Round-robin sharding of the every-world-tick full-roster session drain: with N shards each
+    // bot's packet queue / teleport ack is only serviced every N-th tick (~N * 50ms), which packets
+    // and teleport acks tolerate fine, and the per-tick cost drops to roster/N. 1 = unsharded
+    // walk-everything behavior (safe default / kill switch).
+    static uint32 const shards = sConfigMgr->GetOption<uint32>("AiPlayerbot.UpdateSessionsShards", 1);
+    if (shards <= 1)
+    {
+        PlayerbotHolder::UpdateSessions();
+        return;
+    }
+
+    // World-thread only (called from OnPlayerbotUpdate), so a plain static counter is fine.
+    static uint32 tickCounter = 0;
+    PlayerbotHolder::UpdateSessions(shards, tickCounter++ % shards);
 }
 
 void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
@@ -1780,6 +1844,33 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>&
     PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "RandomTeleportByLocations");
 
     std::shuffle(std::begin(tlocs), std::end(tlocs), RandomEngine::Instance());
+
+    // Population-balanced destination pick: bots on one map update serially on that map's thread,
+    // so piling everyone onto the busiest continent is the scaling wall. Stable-sort the shuffled
+    // candidates by their map's player count, BUCKETED (count / 100) so maps under similar
+    // load stay shuffled relative to each other - the selection loop below then naturally tries
+    // the least-loaded maps first while keeping randomness within a bucket. Counts come from the
+    // world-thread snapshot (see RefreshMapPopulationSnapshot) because this path also runs on
+    // map-worker threads via the level-up maintenance action.
+    static bool const balanceTeleports =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.PopulationBalancedTeleports", true);
+    if (balanceTeleports)
+    {
+        std::unordered_map<uint32, uint32> mapLoadBucket;
+        for (WorldPosition const& tloc : tlocs)
+        {
+            uint32 const mapId = tloc.GetMapId();
+            if (mapLoadBucket.find(mapId) != mapLoadBucket.end())
+                continue;
+
+            mapLoadBucket[mapId] = GetSnapshottedMapPopulation(mapId) / 100;
+        }
+
+        std::stable_sort(std::begin(tlocs), std::end(tlocs),
+                         [&mapLoadBucket](WorldPosition const& a, WorldPosition const& b)
+                         { return mapLoadBucket.at(a.GetMapId()) < mapLoadBucket.at(b.GetMapId()); });
+    }
+
     for (uint32 i = 0; i < tlocs.size(); i++)
     {
         WorldLocation loc = tlocs[i];

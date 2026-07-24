@@ -8,13 +8,14 @@
 #define PLAYERBOTS_TRAVELTRIGGERS_H
 
 #include "Trigger.h"
+#include "TriggerInterval.h"
 
 class PlayerbotAI;
 
 class NoTravelTargetTrigger : public Trigger
 {
 public:
-    NoTravelTargetTrigger(PlayerbotAI* botAI) : Trigger(botAI, "no travel target") {}
+    NoTravelTargetTrigger(PlayerbotAI* botAI) : Trigger(botAI, "no travel target", RelaxedTriggerInterval(2)) {}
 
     bool IsActive() override;
 };
@@ -22,7 +23,7 @@ public:
 class FarFromTravelTargetTrigger : public Trigger
 {
 public:
-    FarFromTravelTargetTrigger(PlayerbotAI* botAI) : Trigger(botAI, "far from travel target") {}
+    FarFromTravelTargetTrigger(PlayerbotAI* botAI) : Trigger(botAI, "far from travel target", RelaxedTriggerInterval(2)) {}
 
     bool IsActive() override;
 };

@@ -18,6 +18,8 @@
 #include "SpellMgr.h"
 
 #include <algorithm>
+#include <mutex>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -31,6 +33,15 @@ namespace
         uint32 auctionId = 0;
         uint32 buyout = 0;
     };
+
+    // Resume cursor for the capped scan pass (AiPlayerbot.AuctionBuyScanCap), keyed by houseId:
+    // the last auction id the previous pass (by ANY bot) processed in that house. The house's
+    // auction map is a std::map ordered by auction id, so successive passes resume at
+    // upper_bound(cursor) and wrap to the start when the end is reached - together the passes
+    // sweep the whole house in slices instead of every pass re-walking the same first entries.
+    // Mutex-guarded because buy passes run from map-update contexts on parallel map threads.
+    std::mutex auctionBuyCursorLock;
+    std::unordered_map<uint32, uint32> auctionBuyCursorByHouse;
 
     // Every reagent entry used by a tradeskill create-item recipe the bot actually knows. This is
     // the cheapest existing enumeration: the same bot spell-map walk the master-ordered "craft"
@@ -103,9 +114,13 @@ bool AuctionBuyAction::Execute(Event /*event*/)
 
     // GetAuctionsMap() takes the faction TEMPLATE id and folds in the two-sided-interaction
     // config itself (returns the Neutral house when that's set) - see the API notes on
-    // StoreLootAction::AuctionItem.
+    // StoreLootAction::AuctionItem. The DBC entry is fetched the same way purely for its houseId,
+    // which keys the scan resume cursor below (consistent under two-sided folding, unlike the raw
+    // faction id).
     AuctionHouseObject* auctionHouse = sAuctionMgr->GetAuctionsMap(auctioneer->GetFaction());
-    if (!auctionHouse)
+    AuctionHouseEntry const* ahEntry =
+        AuctionHouseMgr::GetAuctionHouseEntryFromFactionTemplate(auctioneer->GetFaction());
+    if (!auctionHouse || !ahEntry)
         return false;
 
     // Budgets: the existing budget system already reserves repair/consumable/travel money, so
@@ -128,14 +143,56 @@ bool AuctionBuyAction::Execute(Event /*event*/)
     std::vector<AuctionBuyCandidate> reagentCandidates;
     uint32 evaluations = 0;
 
+    // Total-iteration cap for the scan pass: even the "cheap" pre-filters (a GetItemTemplate per
+    // entry) add up when the house holds 10k+ auctions and hundreds of bots run buy passes. Each
+    // pass walks at most scanCap entries, resuming after the shared per-house cursor and wrapping
+    // to the start when the end is reached. 0 = uncapped full-house scan (kill switch, pre-cap
+    // behavior).
+    static uint32 const scanCap = sConfigMgr->GetOption<uint32>("AiPlayerbot.AuctionBuyScanCap", 500);
+
+    uint32 cursor = 0;
+    if (scanCap)
+    {
+        std::lock_guard<std::mutex> lock(auctionBuyCursorLock);
+        cursor = auctionBuyCursorByHouse[ahEntry->houseId];
+    }
+
     // Scan pass: iterate and decide synchronously, buy later - the buyout path removes entries
     // from this very map, so no purchases may happen while iterating it.
-    for (auto const& auctionPair : auctionHouse->GetAuctions())
+    auto const& auctions = auctionHouse->GetAuctions();
+    auto auctionItr = scanCap ? auctions.upper_bound(cursor) : auctions.begin();
+    uint32 lastProcessedId = cursor;
+    uint32 iterations = 0;
+    bool wrapped = false;
+    while (true)
     {
+        if (auctionItr == auctions.end())
+        {
+            // Wrap to the start once so a cursor near the end of the map still yields a full
+            // slice. A second arrival at end() - or any arrival when uncapped or starting from
+            // the beginning - means the whole house was covered.
+            if (!scanCap || wrapped || cursor == 0)
+                break;
+
+            wrapped = true;
+            auctionItr = auctions.begin();
+            continue;
+        }
+
+        // After wrapping, stop once we're back past the starting point - full circle.
+        if (wrapped && auctionItr->first > cursor)
+            break;
+
+        if (scanCap && iterations >= scanCap)
+            break;
+
         if (evaluations >= MAX_FULL_EVALUATIONS_PER_PASS)
             break;
 
-        AuctionEntry const* auction = auctionPair.second;
+        AuctionEntry const* auction = auctionItr->second;
+        lastProcessedId = auctionItr->first;
+        ++auctionItr;
+        ++iterations;
 
         // Cheap pre-filters first, most selective and cheapest up front: buyout-only...
         if (!auction->buyout)
@@ -196,6 +253,13 @@ bool AuctionBuyAction::Execute(Event /*event*/)
 
             reagentCandidates.push_back({auction->Id, auction->buyout});
         }
+    }
+
+    // Publish the resume point for the next pass (by any bot) over this house.
+    if (scanCap)
+    {
+        std::lock_guard<std::mutex> lock(auctionBuyCursorLock);
+        auctionBuyCursorByHouse[ahEntry->houseId] = lastProcessedId;
     }
 
     if (gearCandidates.empty() && reagentCandidates.empty())

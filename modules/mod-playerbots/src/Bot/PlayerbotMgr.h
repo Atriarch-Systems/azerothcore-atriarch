@@ -38,7 +38,11 @@ public:
     PlayerBotMap::const_iterator GetPlayerBotsEnd() const { return playerBots.end(); }
 
     void UpdateAIInternal([[maybe_unused]] uint32 elapsed, [[maybe_unused]] bool minimal = false) override{};
-    void UpdateSessions();
+    // Drains queued packets / pending teleport acks for the held bots. With shards > 1 only every
+    // shards-th bot (by running index, offset by shardIndex) is processed - used by the
+    // random-bot-wide caller to spread the full-roster walk across world ticks. The defaults
+    // (single shard) keep the walk-everything behavior for the per-master path.
+    void UpdateSessions(uint32 shards = 1, uint32 shardIndex = 0);
     void HandleBotPackets(WorldSession* session);
 
     void LogoutAllBots();

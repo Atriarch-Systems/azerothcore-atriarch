@@ -6,6 +6,7 @@
 #include "mod-ollama-chat_personality.h"
 #include "mod-ollama-chat_rumors.h"
 #include "mod-ollama-chat_sentiment.h"
+#include "mod-ollama-chat_handler.h"
 #include "Player.h"
 #include "ObjectAccessor.h"
 #include "Guild.h"
@@ -292,122 +293,122 @@ void OllamaBotEventChatter::QueueEvent(Player* bot, std::string type, std::strin
 
     uint64_t botGuid = bot->GetGUID().GetRawValue();
 
-    std::thread([this, botGuid, type, detail, actorName, isGuildEvent]()
+    // The prompt reads the Player* - build it here on the world thread, not in the worker.
+    std::string prompt = BuildPrompt(bot, g_EventChatterPromptTemplate, type, detail, actorName);
+    if (prompt.empty())
+        return;
+
+    std::thread([botGuid, prompt, isGuildEvent]()
     {
         try
         {
-            Player* botPtr = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
-            if (!botPtr) return;
-
-            std::string prompt = BuildPrompt(botPtr, g_EventChatterPromptTemplate, type, detail, actorName);
-            if (prompt.empty()) return;
-
+            // Worker thread: touch only strings here, never Player*/game objects.
             std::string response = QueryOllamaAPI(prompt);
             if (response.empty())
             {
                 if (g_DebugEnabled)
-                    LOG_INFO("server.loading", "[OllamaChat] Bot {} skipped event response due to API error", botPtr->GetName());
+                    LOG_INFO("server.loading", "[OllamaChat] Bot skipped event response due to API error");
                 return;
             }
-
-            // reacquire pointers before use
-            botPtr = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
-            if (!botPtr) return;
-            PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(botPtr);
-            if (!botAI) return;
 
             // Simulate typing delay if enabled
             if (g_EnableTypingSimulation)
             {
                 uint32_t delay = g_TypingSimulationBaseDelay + (response.length() * g_TypingSimulationDelayPerChar);
                 if (g_DebugEnabled)
-                    LOG_INFO("server.loading", "[OllamaChat] Bot {} simulating typing delay: {}ms for {} characters", 
-                             botPtr->GetName(), delay, response.length());
+                    LOG_INFO("server.loading", "[OllamaChat] Bot simulating typing delay: {}ms for {} characters", delay, response.length());
                 std::this_thread::sleep_for(std::chrono::milliseconds(delay));
-                
-                // Reacquire pointers after delay
-                botPtr = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
-                if (!botPtr) return;
-                botAI = PlayerbotsMgr::instance().GetPlayerbotAI(botPtr);
-                if (!botAI) return;
             }
 
-            // Route response to random appropriate channel
-            if (isGuildEvent && botPtr->GetGuild())
+            // Marshal delivery onto the world thread (drained in
+            // OllamaBotRandomChatter::OnUpdate); re-resolve the bot by GUID
+            // there - it may log out during the LLM round trip.
+            QueueBotChatDelivery([botGuid, isGuildEvent, response]()
             {
-                // Check if guild chat is disabled
-                if (g_DisableForGuild)
-                {
-                    if (g_DebugEnabled)
-                        LOG_INFO("server.loading", "[Ollama Chat] Guild event chatter skipped (guild channels disabled)");
+                Player* botPtr = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
+                if (!botPtr)
                     return;
-                }
-                
-                botAI->SayToGuild(response);
-            }
-            else if (botPtr->GetGroup())
-            {
-                // Check if party chat is disabled
-                if (g_DisableForParty)
-                {
-                    if (g_DebugEnabled)
-                        LOG_INFO("server.loading", "[Ollama Chat] Party event chatter skipped (party channels disabled)");
+                PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(botPtr);
+                if (!botAI)
                     return;
-                }
-                
-                botAI->SayToParty(response);
-            }
-            else
-            {
-                // For solo bots, randomly pick between Say and General channel
-                std::vector<std::string> channels;
-                
-                // Only add General if custom channels are not disabled
-                if (!g_DisableForCustomChannels)
+
+                // Route response to random appropriate channel
+                if (isGuildEvent && botPtr->GetGuild())
                 {
-                    channels.push_back("General");
-                }
-                
-                // Only add Say if not disabled
-                if (!g_DisableForSayYell)
-                {
-                    channels.push_back("Say");
-                }
-                
-                // If no channels are available, skip event chatter
-                if (channels.empty())
-                {
-                    if (g_DebugEnabled)
-                        LOG_INFO("server.loading", "[Ollama Chat] Bot {} skipping event chatter (all available channels disabled)", botPtr->GetName());
-                    return;
-                }
-                
-                std::random_device rd;
-                std::mt19937 gen(rd());
-                std::uniform_int_distribution<size_t> dist(0, channels.size() - 1);
-                std::string selectedChannel = channels[dist(gen)];
-                
-                if (selectedChannel == "Say")
-                {
-                    if (g_DebugEnabled)
-                        LOG_INFO("server.loading", "[Ollama Chat] Bot Event Chatter Say: {}", response);
-                    botAI->Say(response);
-                }
-                else if (selectedChannel == "General")
-                {
-                    if (g_DebugEnabled)
-                        LOG_INFO("server.loading", "[Ollama Chat] Bot Event Chatter General: {}", response);
-                    
-                    // Use playerbots' SayToChannel method if available, otherwise use direct channel access
-                    if (!botAI->SayToChannel(response, ChatChannelId::GENERAL))
+                    // Check if guild chat is disabled
+                    if (g_DisableForGuild)
                     {
-                        // Fallback to Say if channel message failed
                         if (g_DebugEnabled)
-                            LOG_INFO("server.loading", "[Ollama Chat] Failed to send to General channel, falling back to Say");
+                            LOG_INFO("server.loading", "[Ollama Chat] Guild event chatter skipped (guild channels disabled)");
+                        return;
+                    }
+                
+                    botAI->SayToGuild(response);
+                }
+                else if (botPtr->GetGroup())
+                {
+                    // Check if party chat is disabled
+                    if (g_DisableForParty)
+                    {
+                        if (g_DebugEnabled)
+                            LOG_INFO("server.loading", "[Ollama Chat] Party event chatter skipped (party channels disabled)");
+                        return;
+                    }
+                
+                    botAI->SayToParty(response);
+                }
+                else
+                {
+                    // For solo bots, randomly pick between Say and General channel
+                    std::vector<std::string> channels;
+                
+                    // Only add General if custom channels are not disabled
+                    if (!g_DisableForCustomChannels)
+                    {
+                        channels.push_back("General");
+                    }
+                
+                    // Only add Say if not disabled
+                    if (!g_DisableForSayYell)
+                    {
+                        channels.push_back("Say");
+                    }
+                
+                    // If no channels are available, skip event chatter
+                    if (channels.empty())
+                    {
+                        if (g_DebugEnabled)
+                            LOG_INFO("server.loading", "[Ollama Chat] Bot {} skipping event chatter (all available channels disabled)", botPtr->GetName());
+                        return;
+                    }
+                
+                    std::random_device rd;
+                    std::mt19937 gen(rd());
+                    std::uniform_int_distribution<size_t> dist(0, channels.size() - 1);
+                    std::string selectedChannel = channels[dist(gen)];
+                
+                    if (selectedChannel == "Say")
+                    {
+                        if (g_DebugEnabled)
+                            LOG_INFO("server.loading", "[Ollama Chat] Bot Event Chatter Say: {}", response);
                         botAI->Say(response);
                     }
+                    else if (selectedChannel == "General")
+                    {
+                        if (g_DebugEnabled)
+                            LOG_INFO("server.loading", "[Ollama Chat] Bot Event Chatter General: {}", response);
+                    
+                        // Use playerbots' SayToChannel method if available, otherwise use direct channel access
+                        if (!botAI->SayToChannel(response, ChatChannelId::GENERAL))
+                        {
+                            // Fallback to Say if channel message failed
+                            if (g_DebugEnabled)
+                                LOG_INFO("server.loading", "[Ollama Chat] Failed to send to General channel, falling back to Say");
+                            botAI->Say(response);
+                        }
+                    }
                 }
-            }
+            });
         }
         catch (const std::exception& e)
         {

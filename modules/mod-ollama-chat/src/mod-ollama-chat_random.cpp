@@ -37,6 +37,10 @@ std::unordered_map<uint64_t, time_t> nextRandomChatTime;
 
 void OllamaBotRandomChatter::OnUpdate(uint32 diff)
 {
+    // Run queued LLM deliveries on the world thread first - even while the
+    // module is disabled, so responses already in flight still land safely.
+    DrainBotChatDeliveries();
+
     if (!g_Enable)
         return;
 
@@ -713,10 +717,7 @@ void OllamaBotRandomChatter::HandleRandomChatter()
 
             std::thread([botGuid, prompt, isGuildComment]() {
                 try {
-                    Player* botPtr = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
-                    if (!botPtr) return;
-                    
-                    // Generate response from LLM
+                    // Worker thread: touch only strings here, never Player*/game objects.
                     g_OllamaSubroutine = "random-chatter";
                     std::string response = QueryOllamaAPI(prompt);
                     g_OllamaSubroutine = "bot-chat";
@@ -726,216 +727,217 @@ void OllamaBotRandomChatter::HandleRandomChatter()
                             LOG_INFO("server.loading", "[OllamaChat] Bot skipped random chatter due to API error");
                         return;
                     }
-                    
-                    botPtr = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
-                    if (!botPtr) return;
-                    PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(botPtr);
-                    if (!botAI) return;
-                    
+
                     // Simulate typing delay if enabled
                     if (g_EnableTypingSimulation)
                     {
                         uint32_t delay = g_TypingSimulationBaseDelay + (response.length() * g_TypingSimulationDelayPerChar);
                         if (g_DebugEnabled)
-                            LOG_INFO("server.loading", "[OllamaChat] Bot simulating typing delay: {}ms for {} characters", 
-                                     delay, response.length());
+                            LOG_INFO("server.loading", "[OllamaChat] Bot simulating typing delay: {}ms for {} characters", delay, response.length());
                         std::this_thread::sleep_for(std::chrono::milliseconds(delay));
-                        
-                        // Reacquire pointers after delay
-                        botPtr = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
-                        if (!botPtr) return;
-                        botAI = PlayerbotsMgr::instance().GetPlayerbotAI(botPtr);
-                        if (!botAI) return;
                     }
-                    
-                    // Guild-based random chatter goes to guild chat
-                    if (isGuildComment && botPtr->GetGuild())
+
+                    // Marshal delivery onto the world thread (drained in
+                    // OllamaBotRandomChatter::OnUpdate); re-resolve the bot by GUID
+                    // there - it may log out during the LLM round trip.
+                    QueueBotChatDelivery([botGuid, isGuildComment, response]()
                     {
-                        // Check if guild chat is disabled
-                        if (g_DisableForGuild)
-                        {
-                            if (g_DebugEnabled)
-                                LOG_INFO("server.loading", "[Ollama Chat] Guild random chatter skipped (guild channels disabled)");
+                        Player* botPtr = ObjectAccessor::FindPlayer(ObjectGuid(botGuid));
+                        if (!botPtr)
                             return;
-                        }
-                        
-                        // Verify there are still real players in the guild
-                        bool hasRealPlayerInGuild = false;
-                        Guild* guild = botPtr->GetGuild();
-                        for (auto const& pair : ObjectAccessor::GetPlayers())
-                        {
-                            Player* player = pair.second;
-                            if (!player || !player->IsInWorld())
-                                continue;
-                            if (PlayerbotsMgr::instance().GetPlayerbotAI(player))
-                                continue;
-                            if (player->GetGuild() && player->GetGuild()->GetId() == guild->GetId())
-                            {
-                                hasRealPlayerInGuild = true;
-                                break;
-                            }
-                        }
-                        
-                        if (hasRealPlayerInGuild)
-                        {
-                            if (g_DebugEnabled)
-                                LOG_INFO("server.loading", "[Ollama Chat] Bot Guild-Based Random Chatter: {}", response);
-                            botAI->SayToGuild(response);
-                            ProcessBotChatMessage(botPtr, response, SRC_GUILD_LOCAL, nullptr);
-                        }
-                        else if (g_DebugEnabled)
-                        {
-                            LOG_INFO("server.loading", "[Ollama Chat] Bot {} skipping guild random chatter (no real players in guild anymore)", botPtr->GetName());
-                        }
-                    }
-                    else if (botPtr->GetGroup())
-                    {
-                        // Check if party chat is disabled
-                        if (g_DisableForParty)
-                        {
-                            if (g_DebugEnabled)
-                                LOG_INFO("server.loading", "[Ollama Chat] Party random chatter skipped (party channels disabled)");
+                        PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(botPtr);
+                        if (!botAI)
                             return;
-                        }
-                        
-                        if (g_DebugEnabled)
-                            LOG_INFO("server.loading", "[Ollama Chat] Bot Random Chatter Party: {}", response);
-                        botAI->SayToParty(response);
-                        ProcessBotChatMessage(botPtr, response, SRC_PARTY_LOCAL, nullptr);
-                    }
-                    else
-                    {
-                        // For bots not in a party, check if any real player is within Say distance
-                        bool realPlayerInSayDistance = false;
-                        if (botPtr->IsInWorld())
+
+                        // Guild-based random chatter goes to guild chat
+                        if (isGuildComment && botPtr->GetGuild())
                         {
-                            for (auto const& pair : ObjectAccessor::GetPlayers())
+                            // Check if guild chat is disabled
+                            if (g_DisableForGuild)
                             {
-                                Player* player = pair.second;
-                                if (!player || !player->IsInWorld())
-                                    continue;
-                                    
-                                if (PlayerbotsMgr::instance().GetPlayerbotAI(player))
-                                    continue;
-                                    
-                                if (botPtr->GetDistance(player) <= g_SayDistance)
-                                {
-                                    realPlayerInSayDistance = true;
-                                    break;
-                                }
-                            }
-                        }
-                        
-                        // Build channel list - only include channels with real players
-                        std::vector<std::string> channels;
-                        
-                        // Check if any real player is in the General channel (same zone and faction)
-                        bool realPlayerInGeneral = false;
-                        if (!g_DisableForCustomChannels)
-                        {
-                            for (auto const& pair : ObjectAccessor::GetPlayers())
-                            {
-                                Player* player = pair.second;
-                                if (!player || !player->IsInWorld())
-                                    continue;
-                                if (PlayerbotsMgr::instance().GetPlayerbotAI(player))
-                                    continue;
-                                // General channel is faction and zone specific
-                                if (player->GetTeamId() == botPtr->GetTeamId() && 
-                                    player->GetZoneId() == botPtr->GetZoneId())
-                                {
-                                    realPlayerInGeneral = true;
-                                    break;
-                                }
-                            }
-                            
-                            if (realPlayerInGeneral)
-                            {
-                                channels.push_back("General");
                                 if (g_DebugEnabled)
-                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} adding General to random chatter options (real player in channel)", botPtr->GetName());
+                                    LOG_INFO("server.loading", "[Ollama Chat] Guild random chatter skipped (guild channels disabled)");
+                                return;
+                            }
+                        
+                            // Verify there are still real players in the guild
+                            bool hasRealPlayerInGuild = false;
+                            Guild* guild = botPtr->GetGuild();
+                            for (auto const& pair : ObjectAccessor::GetPlayers())
+                            {
+                                Player* player = pair.second;
+                                if (!player || !player->IsInWorld())
+                                    continue;
+                                if (PlayerbotsMgr::instance().GetPlayerbotAI(player))
+                                    continue;
+                                if (player->GetGuild() && player->GetGuild()->GetId() == guild->GetId())
+                                {
+                                    hasRealPlayerInGuild = true;
+                                    break;
+                                }
+                            }
+                        
+                            if (hasRealPlayerInGuild)
+                            {
+                                if (g_DebugEnabled)
+                                    LOG_INFO("server.loading", "[Ollama Chat] Bot Guild-Based Random Chatter: {}", response);
+                                botAI->SayToGuild(response);
+                                ProcessBotChatMessage(botPtr, response, SRC_GUILD_LOCAL, nullptr);
                             }
                             else if (g_DebugEnabled)
                             {
-                                LOG_INFO("server.loading", "[Ollama Chat] Bot {} NOT adding General to random chatter (no real player in channel)", botPtr->GetName());
+                                LOG_INFO("server.loading", "[Ollama Chat] Bot {} skipping guild random chatter (no real players in guild anymore)", botPtr->GetName());
                             }
                         }
-                        
-                        // Only add Say if not disabled and real player is close enough
-                        if (!g_DisableForSayYell && realPlayerInSayDistance)
+                        else if (botPtr->GetGroup())
                         {
-                            channels.push_back("Say");
+                            // Check if party chat is disabled
+                            if (g_DisableForParty)
+                            {
+                                if (g_DebugEnabled)
+                                    LOG_INFO("server.loading", "[Ollama Chat] Party random chatter skipped (party channels disabled)");
+                                return;
+                            }
+                        
                             if (g_DebugEnabled)
-                                LOG_INFO("server.loading", "[Ollama Chat] Bot {} adding Say to random chatter options (real player within {} yards)", botPtr->GetName(), g_SayDistance);
+                                LOG_INFO("server.loading", "[Ollama Chat] Bot Random Chatter Party: {}", response);
+                            botAI->SayToParty(response);
+                            ProcessBotChatMessage(botPtr, response, SRC_PARTY_LOCAL, nullptr);
                         }
-                        else if (g_DebugEnabled)
+                        else
                         {
-                            if (g_DisableForSayYell)
-                                LOG_INFO("server.loading", "[Ollama Chat] Bot {} NOT adding Say to random chatter (Say/Yell disabled)", botPtr->GetName());
-                            else
-                                LOG_INFO("server.loading", "[Ollama Chat] Bot {} NOT adding Say to random chatter (no real player within {} yards)", botPtr->GetName(), g_SayDistance);
-                        }
-                        
-                        // If no channels are available, skip random chatter
-                        if (channels.empty())
-                        {
-                            if (g_DebugEnabled)
-                                LOG_INFO("server.loading", "[Ollama Chat] Bot {} skipping random chatter (all available channels disabled)", botPtr->GetName());
-                            return;
-                        }
-                        
-                        // Pick random channel
-                        std::random_device rd;
-                        std::mt19937 gen(rd());
-                        std::uniform_int_distribution<size_t> dist(0, channels.size() - 1);
-                        std::string selectedChannel = channels[dist(gen)];
-                        
-                        if (selectedChannel == "Say") {
-                            if (g_DebugEnabled)
-                                LOG_INFO("server.loading", "[Ollama Chat] Bot {} Random Chatter Say (real player within {} yards): {}", botPtr->GetName(), g_SayDistance, response);
-                            botAI->Say(response);
-                            ProcessBotChatMessage(botPtr, response, SRC_SAY_LOCAL, nullptr);
-                        } else if (selectedChannel == "General") {
-                            if (g_DebugEnabled)
-                                LOG_INFO("server.loading", "[Ollama Chat] Bot {} Random Chatter General: {}", botPtr->GetName(), response);
-                            
-                            // Look up the General channel BEFORE sending
-                            Channel* generalChannel = nullptr;
-                            ChannelMgr* cMgr = ChannelMgr::forTeam(botPtr->GetTeamId());
-                            if (cMgr)
+                            // For bots not in a party, check if any real player is within Say distance
+                            bool realPlayerInSayDistance = false;
+                            if (botPtr->IsInWorld())
                             {
-                                generalChannel = cMgr->GetChannel("General", botPtr);
-                            }
-                            
-                            // Use playerbots' SayToChannel method - it handles channel lookup internally
-                            bool sent = botAI->SayToChannel(response, ChatChannelId::GENERAL);
-                            if (g_DebugEnabled)
-                                LOG_INFO("server.loading", "[Ollama Chat] Bot {} SayToChannel result: {}", botPtr->GetName(), sent ? "success" : "failed, using Say fallback");
-                            
-                            if (sent && generalChannel)
-                            {
-                                ProcessBotChatMessage(botPtr, response, SRC_GENERAL_LOCAL, generalChannel);
-                            }
-                            else if (sent && !generalChannel && g_DebugEnabled)
-                            {
-                                LOG_ERROR("server.loading", "[Ollama Chat] Bot {} sent to General but could not find channel for triggering replies", botPtr->GetName());
-                            }
-                            
-                            if (!sent)
-                            {
-                                // Fallback to Say if channel message failed (and real player is close enough)
-                                if (realPlayerInSayDistance)
+                                for (auto const& pair : ObjectAccessor::GetPlayers())
                                 {
-                                    botAI->Say(response);
-                                    ProcessBotChatMessage(botPtr, response, SRC_SAY_LOCAL, nullptr);
+                                    Player* player = pair.second;
+                                    if (!player || !player->IsInWorld())
+                                        continue;
+                                    
+                                    if (PlayerbotsMgr::instance().GetPlayerbotAI(player))
+                                        continue;
+                                    
+                                    if (botPtr->GetDistance(player) <= g_SayDistance)
+                                    {
+                                        realPlayerInSayDistance = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        
+                            // Build channel list - only include channels with real players
+                            std::vector<std::string> channels;
+                        
+                            // Check if any real player is in the General channel (same zone and faction)
+                            bool realPlayerInGeneral = false;
+                            if (!g_DisableForCustomChannels)
+                            {
+                                for (auto const& pair : ObjectAccessor::GetPlayers())
+                                {
+                                    Player* player = pair.second;
+                                    if (!player || !player->IsInWorld())
+                                        continue;
+                                    if (PlayerbotsMgr::instance().GetPlayerbotAI(player))
+                                        continue;
+                                    // General channel is faction and zone specific
+                                    if (player->GetTeamId() == botPtr->GetTeamId() && 
+                                        player->GetZoneId() == botPtr->GetZoneId())
+                                    {
+                                        realPlayerInGeneral = true;
+                                        break;
+                                    }
+                                }
+                            
+                                if (realPlayerInGeneral)
+                                {
+                                    channels.push_back("General");
+                                    if (g_DebugEnabled)
+                                        LOG_INFO("server.loading", "[Ollama Chat] Bot {} adding General to random chatter options (real player in channel)", botPtr->GetName());
                                 }
                                 else if (g_DebugEnabled)
                                 {
-                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} cannot send to General and no real player in Say range, message lost", botPtr->GetName());
+                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} NOT adding General to random chatter (no real player in channel)", botPtr->GetName());
+                                }
+                            }
+                        
+                            // Only add Say if not disabled and real player is close enough
+                            if (!g_DisableForSayYell && realPlayerInSayDistance)
+                            {
+                                channels.push_back("Say");
+                                if (g_DebugEnabled)
+                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} adding Say to random chatter options (real player within {} yards)", botPtr->GetName(), g_SayDistance);
+                            }
+                            else if (g_DebugEnabled)
+                            {
+                                if (g_DisableForSayYell)
+                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} NOT adding Say to random chatter (Say/Yell disabled)", botPtr->GetName());
+                                else
+                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} NOT adding Say to random chatter (no real player within {} yards)", botPtr->GetName(), g_SayDistance);
+                            }
+                        
+                            // If no channels are available, skip random chatter
+                            if (channels.empty())
+                            {
+                                if (g_DebugEnabled)
+                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} skipping random chatter (all available channels disabled)", botPtr->GetName());
+                                return;
+                            }
+                        
+                            // Pick random channel
+                            std::random_device rd;
+                            std::mt19937 gen(rd());
+                            std::uniform_int_distribution<size_t> dist(0, channels.size() - 1);
+                            std::string selectedChannel = channels[dist(gen)];
+                        
+                            if (selectedChannel == "Say") {
+                                if (g_DebugEnabled)
+                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} Random Chatter Say (real player within {} yards): {}", botPtr->GetName(), g_SayDistance, response);
+                                botAI->Say(response);
+                                ProcessBotChatMessage(botPtr, response, SRC_SAY_LOCAL, nullptr);
+                            } else if (selectedChannel == "General") {
+                                if (g_DebugEnabled)
+                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} Random Chatter General: {}", botPtr->GetName(), response);
+                            
+                                // Look up the General channel BEFORE sending
+                                Channel* generalChannel = nullptr;
+                                ChannelMgr* cMgr = ChannelMgr::forTeam(botPtr->GetTeamId());
+                                if (cMgr)
+                                {
+                                    generalChannel = cMgr->GetChannel("General", botPtr);
+                                }
+                            
+                                // Use playerbots' SayToChannel method - it handles channel lookup internally
+                                bool sent = botAI->SayToChannel(response, ChatChannelId::GENERAL);
+                                if (g_DebugEnabled)
+                                    LOG_INFO("server.loading", "[Ollama Chat] Bot {} SayToChannel result: {}", botPtr->GetName(), sent ? "success" : "failed, using Say fallback");
+                            
+                                if (sent && generalChannel)
+                                {
+                                    ProcessBotChatMessage(botPtr, response, SRC_GENERAL_LOCAL, generalChannel);
+                                }
+                                else if (sent && !generalChannel && g_DebugEnabled)
+                                {
+                                    LOG_ERROR("server.loading", "[Ollama Chat] Bot {} sent to General but could not find channel for triggering replies", botPtr->GetName());
+                                }
+                            
+                                if (!sent)
+                                {
+                                    // Fallback to Say if channel message failed (and real player is close enough)
+                                    if (realPlayerInSayDistance)
+                                    {
+                                        botAI->Say(response);
+                                        ProcessBotChatMessage(botPtr, response, SRC_SAY_LOCAL, nullptr);
+                                    }
+                                    else if (g_DebugEnabled)
+                                    {
+                                        LOG_INFO("server.loading", "[Ollama Chat] Bot {} cannot send to General and no real player in Say range, message lost", botPtr->GetName());
+                                    }
                                 }
                             }
                         }
-                    }
+                    });
                 } catch (const std::exception& e) {
                     LOG_ERROR("server.loading", "[Ollama Chat] Exception in random chatter thread: {}", e.what());
                 } catch (...) {

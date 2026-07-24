@@ -284,39 +284,26 @@ uint32 StoreLootAction::RoundPrice(double price)
 
 namespace
 {
-    // Per-bot active-auction count, cached for a few minutes. Auctions aren't indexed by owner -
-    // the only way to count a bot's live listings is a full scan of the house's auction map, which
-    // is too expensive to repeat for every single listing attempt across hundreds of autonomous
-    // sellers. Key is (houseId << 32 | owner guid low) so the count is scoped to the house the bot
-    // is actually listing in (two-sided-interaction config folds everything to Neutral upstream of
-    // here, so the key stays consistent). Mutex-guarded because bot AI can run from map-update
-    // contexts.
-    struct BotAuctionCount
+    // Per-house scan cache, refreshed by ONE full scan of the house's auction map every few
+    // minutes. Auctions aren't indexed by owner or entry - a full scan is the only way to count a
+    // bot's live listings (per-bot flood cap) or an item entry's live listings (per-item flood cap
+    // and, via BotAuctionMarket::GetCachedAuctionCountForEntry(), the expired-overpopulation item
+    // sink in BotAuctionOutcomeScript). The single scan fills BOTH maps - owner -> listing count
+    // for EVERY owner in the house plus entry -> listing count - so the house is walked once per
+    // TTL window instead of once per selling bot. Keyed by houseId (two-sided-interaction config
+    // folds everything to Neutral upstream of here, so the key stays consistent). Mutex-guarded
+    // because bot AI can run from map-update contexts.
+    struct HouseScanCounts
     {
         time_t validUntil = 0;
-        uint32 count = 0;
+        std::unordered_map<uint32, uint32> entryCounts;
+        std::unordered_map<ObjectGuid, uint32> ownerCounts;
     };
 
     constexpr time_t BOT_AUCTION_COUNT_CACHE_TTL = 3 * MINUTE;
 
-    // Per-house entry -> active-listing count, refreshed by the same full house scan that refreshes
-    // the per-bot count above (one iteration feeds both caches). Backs the per-item flood cap
-    // (AiPlayerbot.MaxAuctionsPerItem) and, via BotAuctionMarket::GetCachedAuctionCountForEntry(),
-    // the expired-overpopulation item sink in BotAuctionOutcomeScript. Keyed by houseId.
-    struct HouseEntryCounts
-    {
-        time_t validUntil = 0;
-        std::unordered_map<uint32, uint32> counts;
-    };
-
     std::mutex botAuctionCountLock;
-    std::unordered_map<uint64, BotAuctionCount> botAuctionCountCache;
-    std::unordered_map<uint32, HouseEntryCounts> houseEntryCountCache;
-
-    uint64 BotAuctionCountKey(AuctionHouseEntry const* ahEntry, Player const* bot)
-    {
-        return (uint64(ahEntry->houseId) << 32) | bot->GetGUID().GetCounter();
-    }
+    std::unordered_map<uint32, HouseScanCounts> houseScanCountCache;
 }
 
 uint32 BotAuctionMarket::GetMaxAuctionsPerItem()
@@ -331,8 +318,8 @@ uint32 BotAuctionMarket::GetMaxAuctionsPerItem()
 uint32 BotAuctionMarket::GetCachedAuctionCountForEntry(uint32 houseId, uint32 itemEntry)
 {
     std::lock_guard<std::mutex> lock(botAuctionCountLock);
-    auto const houseItr = houseEntryCountCache.find(houseId);
-    if (houseItr == houseEntryCountCache.end())
+    auto const houseItr = houseScanCountCache.find(houseId);
+    if (houseItr == houseScanCountCache.end())
         return 0;
 
     // A stale cache means no bot has listed in this house for a few minutes; report "unknown" (0)
@@ -341,8 +328,8 @@ uint32 BotAuctionMarket::GetCachedAuctionCountForEntry(uint32 houseId, uint32 it
     if (houseItr->second.validUntil <= GameTime::GetGameTime().count())
         return 0;
 
-    auto const entryItr = houseItr->second.counts.find(itemEntry);
-    return entryItr != houseItr->second.counts.end() ? entryItr->second : 0;
+    auto const entryItr = houseItr->second.entryCounts.find(itemEntry);
+    return entryItr != houseItr->second.entryCounts.end() ? entryItr->second : 0;
 }
 
 // This was previously dead code (wrapped in a block comment) written against an older
@@ -410,52 +397,42 @@ bool StoreLootAction::AuctionItem(Item* item, PlayerbotAI* botAI)
 
     // Flood caps - without them, hundreds of autonomous sellers grow their listing footprint
     // without bound (per bot) and pile identical gathered mats sky-high (per item). Both counts
-    // come from the same cached full house scan (one iteration feeds the per-bot cache and the
-    // per-house entry-count cache) instead of rescanning per listing attempt; both caches are
-    // bumped locally on every successful listing so the caps hold within the TTL window too.
+    // come from the same cached full house scan (one iteration fills the per-owner counts for
+    // every bot in the house plus the per-entry counts, so no bot ever needs its own rescan);
+    // both maps are bumped locally on every successful listing so the caps hold within the TTL
+    // window too.
     static uint32 const maxActiveAuctionsPerBot =
         sConfigMgr->GetOption<uint32>("AiPlayerbot.MaxActiveAuctionsPerBot", 10);
     uint32 const maxAuctionsPerItem = BotAuctionMarket::GetMaxAuctionsPerItem();
-    uint64 const countKey = BotAuctionCountKey(ahEntry, bot);
     if (maxActiveAuctionsPerBot || maxAuctionsPerItem)
     {
         std::lock_guard<std::mutex> lock(botAuctionCountLock);
         time_t const now = GameTime::GetGameTime().count();
-        BotAuctionCount& cachedBot = botAuctionCountCache[countKey];
-        HouseEntryCounts& cachedHouse = houseEntryCountCache[ahEntry->houseId];
-        bool const refreshBot = maxActiveAuctionsPerBot && cachedBot.validUntil <= now;
-        bool const refreshHouse = maxAuctionsPerItem && cachedHouse.validUntil <= now;
-        if (refreshBot || refreshHouse)
+        HouseScanCounts& cachedHouse = houseScanCountCache[ahEntry->houseId];
+        if (cachedHouse.validUntil <= now)
         {
-            if (refreshBot)
-            {
-                cachedBot.count = 0;
-                cachedBot.validUntil = now + BOT_AUCTION_COUNT_CACHE_TTL;
-            }
-
-            if (refreshHouse)
-            {
-                cachedHouse.counts.clear();
-                cachedHouse.validUntil = now + BOT_AUCTION_COUNT_CACHE_TTL;
-            }
+            cachedHouse.entryCounts.clear();
+            cachedHouse.ownerCounts.clear();
+            cachedHouse.validUntil = now + BOT_AUCTION_COUNT_CACHE_TTL;
 
             for (auto const& auctionPair : auctionHouse->GetAuctions())
             {
-                if (refreshBot && auctionPair.second->owner == bot->GetGUID())
-                    ++cachedBot.count;
-
-                if (refreshHouse)
-                    ++cachedHouse.counts[auctionPair.second->item_template];
+                ++cachedHouse.ownerCounts[auctionPair.second->owner];
+                ++cachedHouse.entryCounts[auctionPair.second->item_template];
             }
         }
 
-        if (maxActiveAuctionsPerBot && cachedBot.count >= maxActiveAuctionsPerBot)
-            return false;
+        if (maxActiveAuctionsPerBot)
+        {
+            auto const ownerItr = cachedHouse.ownerCounts.find(bot->GetGUID());
+            if (ownerItr != cachedHouse.ownerCounts.end() && ownerItr->second >= maxActiveAuctionsPerBot)
+                return false;
+        }
 
         if (maxAuctionsPerItem)
         {
-            auto const entryItr = cachedHouse.counts.find(item->GetEntry());
-            if (entryItr != cachedHouse.counts.end() && entryItr->second >= maxAuctionsPerItem)
+            auto const entryItr = cachedHouse.entryCounts.find(item->GetEntry());
+            if (entryItr != cachedHouse.entryCounts.end() && entryItr->second >= maxAuctionsPerItem)
             {
                 LOG_DEBUG("playerbots", "Playerbot {} skipping auction of {}: {} active listings >= per-item cap {}",
                     bot->GetName(), proto->Name1, entryItr->second, maxAuctionsPerItem);
@@ -530,18 +507,17 @@ bool StoreLootAction::AuctionItem(Item* item, PlayerbotAI* botAI)
     bot->SaveInventoryAndGoldToDB(trans);
     CharacterDatabase.CommitTransaction(trans);
 
-    // Keep the cached per-bot listing count and per-house entry count honest between full rescans
-    // (no-ops if the caps are disabled - the cache entries only exist when the cap checks above
-    // ran).
+    // Keep the cached per-owner listing count and per-house entry count honest between full
+    // rescans (no-op if the caps are disabled - the house cache entry only exists when the cap
+    // checks above ran).
     {
         std::lock_guard<std::mutex> lock(botAuctionCountLock);
-        auto const cachedItr = botAuctionCountCache.find(countKey);
-        if (cachedItr != botAuctionCountCache.end())
-            ++cachedItr->second.count;
-
-        auto const houseItr = houseEntryCountCache.find(ahEntry->houseId);
-        if (houseItr != houseEntryCountCache.end())
-            ++houseItr->second.counts[auctionEntry->item_template];
+        auto const houseItr = houseScanCountCache.find(ahEntry->houseId);
+        if (houseItr != houseScanCountCache.end())
+        {
+            ++houseItr->second.ownerCounts[bot->GetGUID()];
+            ++houseItr->second.entryCounts[auctionEntry->item_template];
+        }
     }
 
     LOG_INFO("playerbots", "Playerbot {} listed {} of {} on the auction house for {}..{} copper (deposit {})",
