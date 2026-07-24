@@ -19,15 +19,22 @@
 //
 //  - SOLD:    credit the sale profit straight to the online bot (ModifyMoney + immediate gold save)
 //             and suppress the owner mail.
-//  - EXPIRED: put the unsold item straight back into the online bot's bags (the same
-//             CanStoreItem/MoveItemToInventory sequence HandleMailTakeItem uses) and suppress the
-//             owner mail. If the bags are full, the normal mail path runs as today - bounded
-//             leakage beats item destruction. EXCEPTION - the overpopulation item sink: when the
-//             expiring item's entry already sits at/above the AiPlayerbot.MaxAuctionsPerItem
-//             active-listing cap (per the shared BotAuctionMarket cache maintained by
-//             StoreLootAction::AuctionItem), the item is destroyed outright instead of returned.
-//             This is the bot economy's only true item sink, keeping gathered-mat populations
-//             bounded; each destruction is LOG_INFO'd for observability.
+//  - EXPIRED: resolved per the user-directed disposal policy (docs/bot-economy.md, Phase 6e),
+//             evaluated in exactly this precedence order:
+//              1. the owner bot's own known recipes consume the entry -> return to bags
+//                 (crafting-loop exemption, checked before everything else);
+//              2. quality <= RARE and vendorable (SellPrice > 0) -> "vendored from the mail":
+//                 the vendor price is credited as gold and the item destroyed - each item gets
+//                 one listing attempt, ever;
+//              3. quality >= EPIC -> return to bags for relisting;
+//              4. unvendorable (SellPrice == 0) -> destroyed only when the entry still sits
+//                 at/above the AiPlayerbot.MaxAuctionsPerItem active-listing cap (the
+//                 overpopulation item sink, per the shared BotAuctionMarket cache maintained by
+//                 StoreLootAction::AuctionItem), else returned to bags.
+//             "Return to bags" uses the same CanStoreItem/MoveItemToInventory sequence
+//             HandleMailTakeItem uses and suppresses the owner mail; if the bags are full, the
+//             normal mail path runs as today - bounded leakage beats item destruction. Every
+//             destruction/vendoring is LOG_INFO'd for observability.
 //  - WON:     put the won item straight into the online random-bot bidder's bags (same sequence as
 //             EXPIRED) and suppress the winner mail; bags-full/offline falls back to mail as
 //             today. This is the prerequisite for bot AH buying - won items must reach bags, not

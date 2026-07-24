@@ -58,6 +58,7 @@ public:
     static void Init();
     void Refresh();
     void Randomize(bool incremental);
+    static uint32 MoneyTargetForLevel(uint32 level);
     static std::list<uint32> classQuestIds;
     void ClearEverything();
     void InitSkills();

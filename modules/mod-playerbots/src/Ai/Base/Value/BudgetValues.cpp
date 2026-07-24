@@ -6,6 +6,8 @@
 
 #include "BudgetValues.h"
 
+#include "Config.h"
+#include "PlayerbotFactory.h"
 #include "Playerbots.h"
 
 uint32 MaxGearRepairCostValue::Calculate()
@@ -228,6 +230,19 @@ uint32 FreeMoneyForValue::Calculate()
 
     if (botAI->HasActivePlayerMaster())
         return money;
+
+    // Phase 6b (bot economy, AiPlayerbot.WealthTargets): random bots protect their per-level
+    // wealth target - autonomous spending can never take them below it.
+    static bool const wealthTargets =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.WealthTargets", true);
+    if (wealthTargets && sRandomPlayerbotMgr.IsRandomBot(bot))
+    {
+        uint32 const moneyTarget = PlayerbotFactory::MoneyTargetForLevel(bot->GetLevel());
+        if (moneyTarget > money)
+            return 0;
+
+        money -= moneyTarget;
+    }
 
     uint32 savedMoney = AI_VALUE2(uint32, "total money needed for", getQualifier()) -
                         AI_VALUE2(uint32, "money needed for", getQualifier());

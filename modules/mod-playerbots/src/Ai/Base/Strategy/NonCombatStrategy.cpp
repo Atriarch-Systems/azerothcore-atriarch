@@ -24,6 +24,12 @@ void NonCombatStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
     // CraftRandomItemAction on a 10-minute cadence; it no-ops without reagents in bags and
     // prefers self-upgrades and skill-ups.
     triggers.push_back(new TriggerNode("auto craft", { NextAction("craft random item", 1.0f) }));
+    // The missing vendor outflow (docs/bot-economy.md, Phase 6e): unattended random bots near a
+    // vendor NPC periodically sell junk (ITEM_USAGE_VENDOR) and over-cap AH commons, and destroy
+    // unvendorable over-cap materials their own recipes don't consume. The trigger's own 5-minute
+    // checkInterval keeps this cheap, and AutoVendorSellAction::isUseful() gates out bots with a
+    // real, currently-active player master.
+    triggers.push_back(new TriggerNode("auto vendor sell", { NextAction("auto vendor sell", 1.0f) }));
 }
 
 void CollisionStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)

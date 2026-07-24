@@ -2,6 +2,7 @@
 
 #include "BroadcastHelper.h"
 #include "ChatHelper.h"
+#include "Config.h"
 #include "Creature.h"
 #include "G3D/Vector2.h"
 #include "GameObject.h"
@@ -20,6 +21,7 @@
 #include "Player.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
+#include "PlayerbotFactory.h"
 #include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
 #include "Position.h"
@@ -1110,9 +1112,67 @@ bool NewRpgBaseAction::SelectRandomFlightTaxiNode(uint32& flightMasterEntry, Wor
     return true;
 }
 
+// Earn-gold hysteresis (docs/bot-economy.md, Phase 6c): flip rpgInfo.earnGoldMode when a
+// random bot's money crosses the WealthEarnBelowPct / WealthEarnExitPct bands around its
+// per-level wealth target. Between the bands the current mode is kept, so the enter/exit
+// logs below fire exactly once per crossing - state-change only, no spam.
+static void UpdateEarnGoldMode(PlayerbotAI* botAI, Player* bot, NewRpgInfo& info)
+{
+    static bool const wealthTargets = sConfigMgr->GetOption<bool>("AiPlayerbot.WealthTargets", true);
+    if (!wealthTargets || !sRandomPlayerbotMgr.IsRandomBot(bot) || botAI->HasCheat(BotCheatMask::gold))
+    {
+        info.earnGoldMode = false;
+        return;
+    }
+
+    static uint32 const earnBelowPct = sConfigMgr->GetOption<uint32>("AiPlayerbot.WealthEarnBelowPct", 70);
+    static uint32 const earnExitPct = sConfigMgr->GetOption<uint32>("AiPlayerbot.WealthEarnExitPct", 130);
+    // Max target is 100g = 1,000,000 copper; * 130 = 1.3e8, far below UINT32_MAX - no overflow.
+    uint32 const target = PlayerbotFactory::MoneyTargetForLevel(bot->GetLevel());
+    uint32 const money = bot->GetMoney();
+    if (!info.earnGoldMode && money < target * earnBelowPct / 100)
+    {
+        info.earnGoldMode = true;
+        LOG_DEBUG("playerbots", "[New RPG] Bot {} enters earn-gold mode (money {} below {}% of target {})",
+                  bot->GetName(), money, earnBelowPct, target);
+    }
+    else if (info.earnGoldMode && money > target * earnExitPct / 100)
+    {
+        info.earnGoldMode = false;
+        LOG_DEBUG("playerbots", "[New RPG] Bot {} exits earn-gold mode (money {} above {}% of target {})",
+                  bot->GetName(), money, earnExitPct, target);
+    }
+}
+
+// Phase 6c: bias the status roll while in earn-gold mode - grinding is the most reliable
+// raw-gold faucet, questing a decent one, resting earns nothing. REST is halved with plain
+// integer division and may drop to 0 (base weight 1); a 0 entry can never win the roll, and
+// if REST was the ONLY available status the probSum == 0 fallback rests anyway.
+static uint32 EarnGoldEffectiveWeight(NewRpgStatus status, uint32 baseWeight)
+{
+    static uint32 const grindBias = sConfigMgr->GetOption<uint32>("AiPlayerbot.WealthGrindBias", 8);
+    switch (status)
+    {
+        case RPG_GO_GRIND:
+            return baseWeight * grindBias;
+        case RPG_DO_QUEST:
+            return baseWeight * 2;
+        case RPG_REST:
+            return baseWeight / 2;
+        default:
+            return baseWeight;
+    }
+}
+
 bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateStatus)
 {
+    UpdateEarnGoldMode(botAI, bot, botAI->rpgInfo);
+    bool const earnGold = botAI->rpgInfo.earnGoldMode;
+
+    // effectiveWeight is kept index-aligned with availableStatus and used for BOTH probSum
+    // and the accumulate roll below - the two must stay in lockstep or selection skews.
     std::vector<NewRpgStatus> availableStatus;
+    std::vector<uint32> effectiveWeight;
     uint32 probSum = 0;
     for (NewRpgStatus status : candidateStatus)
     {
@@ -1121,8 +1181,12 @@ bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateSta
 
         if (CheckRpgStatusAvailable(status))
         {
+            uint32 weight = sPlayerbotAIConfig.RpgStatusProbWeight[status];
+            if (earnGold)
+                weight = EarnGoldEffectiveWeight(status, weight);
             availableStatus.push_back(status);
-            probSum += sPlayerbotAIConfig.RpgStatusProbWeight[status];
+            effectiveWeight.push_back(weight);
+            probSum += weight;
         }
     }
     // Safety check. Default to "rest" if all RPG weights = 0
@@ -1135,12 +1199,12 @@ bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateSta
     uint32 rand = urand(1, probSum);
     uint32 accumulate = 0;
     NewRpgStatus chosenStatus = RPG_STATUS_END;
-    for (NewRpgStatus status : availableStatus)
+    for (size_t i = 0; i < availableStatus.size(); ++i)
     {
-        accumulate += sPlayerbotAIConfig.RpgStatusProbWeight[status];
+        accumulate += effectiveWeight[i];
         if (accumulate >= rand)
         {
-            chosenStatus = status;
+            chosenStatus = availableStatus[i];
             break;
         }
     }

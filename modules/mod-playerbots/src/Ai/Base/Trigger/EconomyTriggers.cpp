@@ -63,3 +63,34 @@ bool AutoCraftTrigger::IsActive()
     // same spell-map walk the action does anyway - once per 10 minutes is fine.
     return true;
 }
+
+bool AutoVendorSellTrigger::IsActive()
+{
+    static bool const autoVendorSell = sConfigMgr->GetOption<bool>("AiPlayerbot.AutoVendorSell", true);
+    if (!autoVendorSell)
+        return false;
+
+    // Cheap short-circuits before the NPC scan below - AutoVendorSellAction::isUseful() enforces
+    // the same rules authoritatively (SellAction.cpp), this just avoids the work for the common
+    // master-controlled-bot case on a trigger that isn't shared with anything else.
+    if (botAI->HasActivePlayerMaster())
+        return false;
+
+    if (!sRandomPlayerbotMgr.IsRandomBot(bot))
+        return false;
+
+    // Selling goes through the real CMSG_SELL_ITEM session handler, which (exactly like a real
+    // vendor gossip window) needs a live VENDOR-flagged NPC in interact range - the same
+    // "nearest npcs" + GetNPCIfCanInteractWith scan SellAction::Sell (SellAction.cpp) uses to
+    // locate its vendor, with UNIT_NPC_FLAG_VENDOR instead of the auction triggers' AUCTIONEER.
+    // No sellable-item precondition (see the class comment, EconomyTriggers.h): the action no-ops
+    // cheaply when the bags hold nothing disposable.
+    GuidVector npcs = AI_VALUE(GuidVector, "nearest npcs");
+    for (ObjectGuid const guid : npcs)
+    {
+        if (bot->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_VENDOR))
+            return true;
+    }
+
+    return false;
+}

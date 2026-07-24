@@ -86,6 +86,15 @@ struct NewRpgInfo
     WorldPosition moveFarFlightMasterPos;
     // END MOVE_FAR
 
+    // Earn-gold hysteresis latch (docs/bot-economy.md, Phase 6c). Set by
+    // UpdateEarnGoldMode (NewRpgBaseAction.cpp) when a random bot's money falls
+    // below WealthEarnBelowPct of its per-level wealth target, cleared once it
+    // climbs above WealthEarnExitPct - between the two bands the current mode is
+    // kept, so enter/exit fire exactly once per crossing. While set,
+    // RandomChangeStatus biases the status roll toward GO_GRIND/DO_QUEST and away
+    // from REST so the bot earns its way back to target before going about its day.
+    bool earnGoldMode{false};
+
     using RpgData = std::variant<
         Idle,
         GoGrind,

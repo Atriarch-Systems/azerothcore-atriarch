@@ -14,6 +14,10 @@
 #include "LootAction.h"
 #include "Player.h"
 #include "RandomPlayerbotMgr.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
+
+#include <unordered_set>
 
 namespace
 {
@@ -38,6 +42,39 @@ namespace
             return nullptr;
 
         return player;
+    }
+
+    // Every reagent entry consumed by a tradeskill create-item recipe the given bot actually
+    // knows - the crafting-loop exemption for the expired-return policy below (an enchanter's
+    // expired dust listings come home instead of being vendored/destroyed). Copied verbatim from
+    // the identical helper in AuctionBuyAction.cpp (Phase 4b, read-only reference): the bot
+    // spell-map walk filtered exactly like CraftRandomItemAction::AcceptSpell
+    // (CastCustomSpellAction.cpp). One full spell-map walk per expired bot auction - expiries are
+    // sporadic (a few per bot per listing cycle), so this stays negligible.
+    std::unordered_set<uint32> KnownRecipeReagents(Player* bot)
+    {
+        std::unordered_set<uint32> reagents;
+        for (auto const& spellPair : bot->GetSpellMap())
+        {
+            if (spellPair.second->State == PLAYERSPELL_REMOVED || !spellPair.second->Active)
+                continue;
+
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellPair.first);
+            if (!spellInfo)
+                continue;
+
+            if (spellInfo->Effects[EFFECT_0].Effect != SPELL_EFFECT_CREATE_ITEM ||
+                !spellInfo->ReagentCount[EFFECT_0] || spellInfo->SchoolMask != 0)
+                continue;
+
+            for (uint8 i = 0; i < MAX_SPELL_REAGENTS; ++i)
+            {
+                if (spellInfo->Reagent[i] > 0)
+                    reagents.insert(uint32(spellInfo->Reagent[i]));
+            }
+        }
+
+        return reagents;
     }
 }
 
@@ -87,30 +124,77 @@ void BotAuctionOutcomeScript::OnBeforeAuctionHouseMgrSendAuctionExpiredMail(
     if (!item)
         return;
 
-    // Overpopulation item sink: if the house already carries at least the per-item cap
-    // (AiPlayerbot.MaxAuctionsPerItem) of this entry - per the shared per-house entry-count cache
-    // StoreLootAction::AuctionItem maintains (BotAuctionMarket, LootAction.h) - then nobody wanted
-    // this item at cap-level supply, and returning it to bags would only make the bot relist it
-    // into the same glut forever. Destroy it instead: FSetState(ITEM_REMOVED) + save deletes it
-    // from item_instance and drops it from the manager's map; the caller's later plain
-    // RemoveAItem(item_guid) then finds nothing and is a safe no-op. This is the bot economy's
-    // only true item destruction, so log it at INFO for observability.
-    if (uint32 const maxAuctionsPerItem = BotAuctionMarket::GetMaxAuctionsPerItem())
+    ItemTemplate const* proto = item->GetTemplate();
+
+    // Disposal policy for expired bot auctions - user-directed precedence (docs/bot-economy.md,
+    // Phase 6e), evaluated EXACTLY in this order:
+    //  1. Own-recipe reagent: if the OWNER bot's known recipes consume this entry, return it to
+    //     bags regardless of anything else (crafting-loop exemption - an enchanter keeps its
+    //     dusts for its own crafting instead of shredding them below).
+    //  2. Quality <= RARE and vendorable (SellPrice > 0): "vendor from the mail" - credit the
+    //     vendor price as gold and destroy the item. One listing attempt per item, ever: nobody
+    //     bought it at auction, so it takes the vendor price instead of clogging bags/relists.
+    //  3. Quality >= EPIC: too valuable to shred - return to bags for relisting.
+    //  4. Unvendorable (SellPrice == 0; only quality <= RARE can reach here): destroy only if the
+    //     entry still sits at/over the per-item flood cap (the pre-existing overpopulation sink),
+    //     else return to bags.
+    // Every "return to bags" branch keeps the existing bags-full -> mail fallback at the bottom.
+    if (!KnownRecipeReagents(bot).count(proto->ItemId))
     {
-        uint32 const activeCount =
-            BotAuctionMarket::GetCachedAuctionCountForEntry(uint32(auction->houseId), auction->item_template);
-        if (activeCount >= maxAuctionsPerItem)
+        if (proto->Quality <= ITEM_QUALITY_RARE && proto->SellPrice > 0)
         {
-            sendMail = false;
+            // Rule 2: vendor from the mail. Credit the full-stack vendor price and persist the
+            // gold immediately in its own transaction (same crash-window-minimizing pattern as
+            // the sold path above), then destroy the item exactly like the overpopulation sink
+            // below: RemoveAItem(deleteItem=true) sets ITEM_REMOVED + saves, deleting it from
+            // item_instance and the manager's map, so the caller's later plain
+            // RemoveAItem(item_guid) is a safe no-op.
+            uint32 const vendorValue = proto->SellPrice * auction->itemCount;
+            bot->ModifyMoney(static_cast<int32>(vendorValue));
 
             CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+            bot->SaveGoldToDB(trans);
             auctionHouseMgr->RemoveAItem(auction->item_guid, true, &trans);
             CharacterDatabase.CommitTransaction(trans);
 
-            LOG_INFO("playerbots", "Bot {}: expired auction {} destroyed as overpopulation item sink (item {} x{}, {} active listings >= cap {})",
-                bot->GetName(), auction->Id, auction->item_template, auction->itemCount, activeCount, maxAuctionsPerItem);
+            sendMail = false;
+
+            LOG_INFO("playerbots", "Bot {} vendored expired auction {}: item {} count {} for {} copper",
+                bot->GetName(), auction->Id, auction->item_template, auction->itemCount, vendorValue);
             return;
         }
+
+        if (proto->Quality < ITEM_QUALITY_EPIC)
+        {
+            // Rule 4 - overpopulation item sink for unvendorable materials: if the house already
+            // carries at least the per-item cap (AiPlayerbot.MaxAuctionsPerItem) of this entry -
+            // per the shared per-house entry-count cache StoreLootAction::AuctionItem maintains
+            // (BotAuctionMarket, LootAction.h) - then nobody wanted this item at cap-level supply,
+            // and returning it to bags would only make the bot relist it into the same glut
+            // forever. Destroy it instead: SetState(ITEM_REMOVED) + save deletes it from
+            // item_instance and drops it from the manager's map; the caller's later plain
+            // RemoveAItem(item_guid) then finds nothing and is a safe no-op. True item
+            // destruction, so log it at INFO for observability.
+            if (uint32 const maxAuctionsPerItem = BotAuctionMarket::GetMaxAuctionsPerItem())
+            {
+                uint32 const activeCount =
+                    BotAuctionMarket::GetCachedAuctionCountForEntry(uint32(auction->houseId), auction->item_template);
+                if (activeCount >= maxAuctionsPerItem)
+                {
+                    sendMail = false;
+
+                    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+                    auctionHouseMgr->RemoveAItem(auction->item_guid, true, &trans);
+                    CharacterDatabase.CommitTransaction(trans);
+
+                    LOG_INFO("playerbots", "Bot {}: expired auction {} destroyed as overpopulation item sink (item {} x{}, {} active listings >= cap {})",
+                        bot->GetName(), auction->Id, auction->item_template, auction->itemCount, activeCount, maxAuctionsPerItem);
+                    return;
+                }
+            }
+        }
+        // Rule 3 (quality >= EPIC) and under-cap rule-4 items fall through to the
+        // return-to-bags path below, exactly like rule-1 own-recipe reagents.
     }
 
     // Put the unsold item straight back into the bot's bags, mirroring the core's own

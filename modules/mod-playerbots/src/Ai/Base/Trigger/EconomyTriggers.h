@@ -41,4 +41,22 @@ public:
     bool IsActive() override;
 };
 
+// The missing vendor outflow (docs/bot-economy.md, Phase 6e): autonomous vendor-selling never
+// fired anywhere before this - SellVendorItemsVisitor was only reachable via the master "s" chat
+// command, so random bots accumulated vendor junk until the factory wipe. Fires for unattended
+// random bots with a VENDOR-flagged NPC in interact range so AutoVendorSellAction (SellAction.h)
+// can sell junk/over-cap commons and destroy unvendorable over-cap materials. Same 5-minute
+// literal-ms checkInterval as the buy trigger above. Deliberately NO sellable-item precondition:
+// a faithful one would duplicate the action's own usage-tag + flood-cap evaluation, and the
+// action no-ops cheaply (two cached inventory-value reads and a bag walk, once per 5 minutes)
+// when there's nothing to sell. Gated by AiPlayerbot.AutoVendorSell (default 1, read inline via
+// sConfigMgr like the other new economy keys).
+class AutoVendorSellTrigger : public Trigger
+{
+public:
+    AutoVendorSellTrigger(PlayerbotAI* botAI) : Trigger(botAI, "auto vendor sell", 5 * 60 * 1000) {}
+
+    bool IsActive() override;
+};
+
 #endif

@@ -88,6 +88,7 @@ public:
         creators["auto auction sell"] = &TriggerContext::auto_auction_sell;
         creators["auto auction buy"] = &TriggerContext::auto_auction_buy;
         creators["auto craft"] = &TriggerContext::auto_craft;
+        creators["auto vendor sell"] = &TriggerContext::auto_vendor_sell;
         creators["no attackers"] = &TriggerContext::NoAttackers;
         creators["no target"] = &TriggerContext::NoTarget;
         creators["target in sight"] = &TriggerContext::TargetInSight;
@@ -344,6 +345,7 @@ private:
     static Trigger* auto_auction_sell(PlayerbotAI* botAI) { return new AutoAuctionSellTrigger(botAI); }
     static Trigger* auto_auction_buy(PlayerbotAI* botAI) { return new AutoAuctionBuyTrigger(botAI); }
     static Trigger* auto_craft(PlayerbotAI* botAI) { return new AutoCraftTrigger(botAI); }
+    static Trigger* auto_vendor_sell(PlayerbotAI* botAI) { return new AutoVendorSellTrigger(botAI); }
     static Trigger* NoAttackers(PlayerbotAI* botAI) { return new NoAttackersTrigger(botAI); }
     static Trigger* TankAssist(PlayerbotAI* botAI) { return new TankAssistTrigger(botAI); }
     static Trigger* Timer(PlayerbotAI* botAI) { return new TimerTrigger(botAI); }

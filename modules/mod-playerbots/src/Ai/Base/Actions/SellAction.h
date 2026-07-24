@@ -37,4 +37,27 @@ public:
     bool isUseful() override;
 };
 
+// The previously-missing autonomous vendor outflow (docs/bot-economy.md, Phase 6e):
+// SellVendorItemsVisitor above was only ever reachable via the master "s vendor" chat command, so
+// random bots accumulated vendor junk until the factory wipe. Paired with AutoVendorSellTrigger
+// (Ai/Base/Trigger/EconomyTriggers.h) and wired into NonCombatStrategy, this periodically sells to
+// a nearby VENDOR-flagged NPC:
+//  (a) all ITEM_USAGE_VENDOR items (greys, unworn soulbound - the missing junk outflow), and
+//  (b) ITEM_USAGE_AH items whose entry already sits at/over the AiPlayerbot.MaxAuctionsPerItem
+//      flood cap (commons the AH doesn't need go to the vendor instead of waiting for a slot);
+//  (c) in the same pass, unvendorable (SellPrice == 0) trade goods over that cap are DESTROYED -
+//      unless the bot's own known recipes consume the entry (crafting-loop exemption: an enchanter
+//      keeps its dusts).
+// Derives from SellAction to reuse the real Sell(Item*) mechanism (CMSG_SELL_ITEM through the
+// session handler). Gated off for master-controlled bots by isUseful() and off entirely unless
+// AiPlayerbot.AutoVendorSell is enabled.
+class AutoVendorSellAction : public SellAction
+{
+public:
+    AutoVendorSellAction(PlayerbotAI* botAI) : SellAction(botAI, "auto vendor sell") {}
+
+    bool Execute(Event event) override;
+    bool isUseful() override;
+};
+
 #endif

@@ -132,6 +132,7 @@ public:
         creators["loot"] = &ActionContext::loot;
         creators["auto auction sell"] = &ActionContext::auto_auction_sell;
         creators["auto auction buy"] = &ActionContext::auto_auction_buy;
+        creators["auto vendor sell"] = &ActionContext::auto_vendor_sell;
         creators["lfg leader announce"] = &ActionContext::lfg_leader_announce;
         creators["add loot"] = &ActionContext::add_loot;
         creators["add gathering loot"] = &ActionContext::add_gathering_loot;
@@ -365,6 +366,7 @@ private:
     static Action* loot(PlayerbotAI* botAI) { return new LootAction(botAI); }
     static Action* auto_auction_sell(PlayerbotAI* botAI) { return new AutoAuctionSellAction(botAI); }
     static Action* auto_auction_buy(PlayerbotAI* botAI) { return new AuctionBuyAction(botAI); }
+    static Action* auto_vendor_sell(PlayerbotAI* botAI) { return new AutoVendorSellAction(botAI); }
     static Action* lfg_leader_announce(PlayerbotAI* botAI) { return new LfgLeaderAnnounceAction(botAI); }
     static Action* release_loot(PlayerbotAI* botAI) { return new ReleaseLootAction(botAI); }
     static Action* dps_assist(PlayerbotAI* botAI) { return new DpsAssistAction(botAI); }

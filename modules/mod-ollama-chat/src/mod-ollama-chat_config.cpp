@@ -42,8 +42,6 @@ uint32_t   g_EventChatterMaxBotsPerPlayer    = 2;
 // Ollama LLM API Configuration
 // --------------------------------------------
 std::string g_OllamaUrl        = "http://localhost:11434/api/generate";
-std::string g_HeimdallToken = "";
-thread_local std::string g_OllamaSubroutine = "bot-chat";
 std::string g_OllamaModel      = "llama3.2:1b";
 uint32_t    g_OllamaNumPredict = 40;
 float       g_OllamaTemperature = 0.8f;
@@ -388,7 +386,6 @@ void LoadOllamaChatConfig()
     
     g_MaxBotsToPick                   = sConfigMgr->GetOption<uint32_t>("OllamaChat.MaxBotsToPick", 2);
     g_OllamaUrl                       = sConfigMgr->GetOption<std::string>("OllamaChat.Url", "http://localhost:11434/api/generate");
-    g_HeimdallToken                   = sConfigMgr->GetOption<std::string>("OllamaChat.HeimdallToken", "");
     g_OllamaModel                     = sConfigMgr->GetOption<std::string>("OllamaChat.Model", "llama3.2:1b");
     g_OllamaNumPredict                = sConfigMgr->GetOption<uint32_t>("OllamaChat.NumPredict", 40);
     g_OllamaTemperature               = sConfigMgr->GetOption<float>("OllamaChat.Temperature", 0.8f);

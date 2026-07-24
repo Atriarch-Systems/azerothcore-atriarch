@@ -4,7 +4,6 @@
 
 extern bool g_EnableOllamaBotControl;
 extern std::string g_OllamaBotControlUrl;
-extern std::string g_OllamaBotControlHeimdallToken;
 extern std::string g_OllamaBotControlModel;
 extern bool g_EnableOllamaBotBuddyDebug;
 extern bool g_EnableBotBuddyAddon;

@@ -611,6 +611,34 @@ void PlayerbotFactory::Prepare()
     }
 }
 
+uint32 PlayerbotFactory::MoneyTargetForLevel(uint32 level)
+{
+    // Phase 6a (bot economy): per-level wealth target curve, in copper.
+    // Anchors: 10s@1, 50s@10, 1g@20, 3g@30, 5g@40, 10g@50, 15g@60, 50g@70, 100g@80.
+    static constexpr std::array<std::pair<uint32, uint32>, 9> anchors = {{{1, 1000},
+        {10, 5000}, {20, 10000}, {30, 30000}, {40, 50000}, {50, 100000}, {60, 150000},
+        {70, 500000}, {80, 1000000}}};
+
+    if (level <= anchors.front().first)
+        return anchors.front().second;
+
+    if (level >= anchors.back().first)
+        return anchors.back().second;
+
+    for (size_t i = 1; i < anchors.size(); ++i)
+    {
+        if (level > anchors[i].first)
+            continue;
+
+        uint32 const levelDelta = level - anchors[i - 1].first;
+        uint32 const valueDelta = anchors[i].second - anchors[i - 1].second;
+        uint32 const bracketWidth = anchors[i].first - anchors[i - 1].first;
+        return anchors[i - 1].second + (levelDelta * valueDelta) / bracketWidth;
+    }
+
+    return anchors.back().second;
+}
+
 void PlayerbotFactory::Randomize(bool incremental)
 {
     // if (sPlayerbotAIConfig.disableRandomLevels)
@@ -867,11 +895,16 @@ void PlayerbotFactory::Randomize(bool incremental)
     LOG_DEBUG("playerbots", "Saving to DB...");
     // Phase 0b (bot economy): floor-only gold seeding - never overwrite an earning bot's wealth.
     // A bot below the floor still gets the full random roll so fresh bots seed as before.
+    // Phase 6a (bot economy, AiPlayerbot.WealthTargets): seed to the per-level wealth target
+    // curve (target..1.5x target) instead of the legacy level*10-50g roll that dwarfed it.
     static bool const economyPersistGold =
         sConfigMgr->GetOption<bool>("AiPlayerbot.EconomyPersistGold", true);
-    uint32 const moneyFloor = level * 100000;
+    static bool const wealthTargets =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.WealthTargets", true);
+    uint32 const moneyFloor = wealthTargets ? MoneyTargetForLevel(level) : level * 100000;
     if (!economyPersistGold || bot->GetMoney() < moneyFloor)
-        bot->SetMoney(urand(moneyFloor, level * 5 * 100000));
+        bot->SetMoney(wealthTargets ? urand(moneyFloor, moneyFloor * 3 / 2)
+                                    : urand(moneyFloor, level * 5 * 100000));
     bot->SetHealth(bot->GetMaxHealth());
     bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
     bot->SaveToDB(false, false);
@@ -925,7 +958,11 @@ void PlayerbotFactory::Refresh()
         bot->DurabilityRepairAll(false, 1.0f, false);
     if (bot->isDead())
         bot->ResurrectPlayer(1.0f, false);
-    uint32 money = urand(level * 1000, level * 5 * 1000);
+    // Phase 6a (bot economy, AiPlayerbot.WealthTargets): refresh floor tops up to the per-level
+    // wealth target instead of the legacy level*10-50s roll - floor-only as before.
+    static bool const wealthTargets =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.WealthTargets", true);
+    uint32 money = wealthTargets ? MoneyTargetForLevel(level) : urand(level * 1000, level * 5 * 1000);
     if (bot->GetMoney() < money)
         bot->SetMoney(money);
     // bot->SaveToDB(false, false);
@@ -3330,9 +3367,30 @@ void PlayerbotFactory::InitAvailableSpells()
             trainerIdCache[bot->getClass()].push_back(i->first);
         }
     }
+    // Phase 6d (bot economy, AiPlayerbot.RealTrainingCosts): random bots without the gold cheat
+    // pay the real trainer price per spell (mirroring TrainerAction::Learn); unaffordable spells
+    // are skipped and retried on the next Refresh()/level-up maintenance pass, since
+    // CanTeachSpell only accepts spells not yet known. Masters' alts keep learning free.
+    static bool const realTrainingCosts =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.RealTrainingCosts", true);
+    bool const chargeTraining = realTrainingCosts && sRandomPlayerbotMgr.IsRandomBot(bot) &&
+                                !(botAI && botAI->HasCheat(BotCheatMask::gold));
     for (uint32 trainerId : trainerIdCache[bot->getClass()])
     {
         Trainer::Trainer* trainer = sObjectMgr->GetTrainer(trainerId);
+
+        // No Creature* is in hand here (only template ids), so derive the reputation discount
+        // from the trainer template's faction - the same entry Creature::GetFactionTemplateEntry
+        // would resolve for an unmodified spawn.
+        float reputationDiscount = 1.0f;
+        if (chargeTraining)
+        {
+            CreatureTemplate const* trainerTemplate = sObjectMgr->GetCreatureTemplate(trainerId);
+            FactionTemplateEntry const* factionEntry =
+                trainerTemplate ? sFactionTemplateStore.LookupEntry(trainerTemplate->faction) : nullptr;
+            if (factionEntry)
+                reputationDiscount = bot->GetReputationPriceDiscount(factionEntry);
+        }
 
         for (auto& spell : trainer->GetSpells())
         {
@@ -3344,6 +3402,15 @@ void PlayerbotFactory::InitAvailableSpells()
 
             if (!trainer->CanTeachSpell(bot, trainerSpell))
                 continue;
+
+            if (chargeTraining && trainerSpell->MoneyCost)
+            {
+                uint32 const cost = uint32(trainerSpell->MoneyCost * reputationDiscount);
+                if (bot->GetMoney() < cost)
+                    continue;
+
+                bot->ModifyMoney(-int32(cost));
+            }
 
             if (trainerSpell->IsCastable())
                 bot->CastSpell(bot, trainerSpell->SpellId, true);

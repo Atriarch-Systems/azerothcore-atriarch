@@ -854,6 +854,38 @@ AiPlayerbot.AutoCraft = 1
 # Default: 0 (disabled)
 AiPlayerbot.EconomyRealSinks = 0
 
+# Per-level cash-on-hand targets (docs/bot-economy.md Phase 6): 10s@1, 50s@10,
+# 1g@20, 3g@30, 5g@40, 10g@50, 15g@60, 50g@70, 100g@80, linearly interpolated.
+# Drives gold seeding, spending reserves (autonomous purchases never dip a bot
+# below target), and the earn-gold behavioral drive.
+# Default: 1 (enabled)
+AiPlayerbot.WealthTargets = 1
+
+# Earn-gold hysteresis: enter money-making mode below this percent of the
+# level target, exit above the second percent - so bots aren't perpetually
+# farming the boundary.
+# Defaults: 70 / 130
+AiPlayerbot.WealthEarnBelowPct = 70
+AiPlayerbot.WealthEarnExitPct = 130
+
+# While in earn-gold mode, multiply the idle-activity weight for grinding by
+# this factor (questing is doubled; resting halved).
+# Default: 8
+AiPlayerbot.WealthGrindBias = 8
+
+# Random bots pay the real trainer price for class/trainer spells as they
+# level, skipping ranks they can't afford until they've earned enough.
+# Masters' alt bots keep learning free regardless.
+# Default: 1 (enabled)
+AiPlayerbot.RealTrainingCosts = 1
+
+# Unattended random bots near a vendor periodically sell vendor-tagged junk
+# (greys, unworn soulbound gear) and AH-tagged items whose entry is already
+# at the auction flood cap; unvendorable over-cap trade goods are destroyed
+# unless the bot's own recipes consume them.
+# Default: 1 (enabled)
+AiPlayerbot.AutoVendorSell = 1
+
 # Enable/Disable periodic online - offline of randombots to mimic the real-world scenario where not all players are online simultaneously
 # When enabled, randombots are randomly selected to go online or offline periodically from a larger set
 # Default: 0 (disabled, the set of online bots remains fixed)
